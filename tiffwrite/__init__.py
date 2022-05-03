@@ -1,36 +1,31 @@
-import sys
-import struct
-import numpy as np
-from io import BytesIO
-from multiprocessing import Pool, Process, Queue, Event, cpu_count, Value, queues
-from time import sleep
-from tqdm.auto import tqdm
 import tifffile
 import colorcet
+import struct
+import numpy as np
+import multiprocessing
+from io import BytesIO
+from tqdm.auto import tqdm
 from itertools import product
-from collections import OrderedDict
-from multipledispatch import dispatch
+from collections.abc import Iterable
 from numbers import Number
 from fractions import Fraction
+from traceback import print_exc, format_exc
+from functools import cached_property
+from datetime import datetime
+from matplotlib import colors as mpl_colors
+from contextlib import contextmanager
+from warnings import warn
+
+__all__ = ['IJTiffFile', 'Tag', 'tiffwrite']
 
 
-def get_colormap(colormap, dtype='int8', byteorder='<'):
-    colormap = getattr(colorcet, colormap)
-    colormap[0] = '#ffffff'
-    colormap[-1] = '#000000'
-    colormap = 65535 * np.array([[int(''.join(i), 16) for i in zip(*[iter(s[1:])] * 2)] for s in colormap]) // 255
-    if np.dtype(dtype).itemsize == 2:
-        colormap = np.tile(colormap, 256).reshape((-1, 3))
-    return b''.join([struct.pack(byteorder + 'H', c) for c in colormap.T.flatten()])
-
-
-def tiffwrite(file, data, axes='TZCXY', bar=False, colormap=None, pxsize=None):
-    """ file:     string; filename of the new tiff file
-        data:     2 to 5D numpy array
-        axes:     string; order of dimensions in data, default: TZCXY for 5D, ZCXY for 4D, CXY for 3D, XY for 2D data
-        bar:      bool; whether or not to show a progress bar
-        colormap: string; choose any colormap from the colorcet module
-        pxsize:   float; set tiff tag so ImageJ can read the pixel size
+def tiffwrite(file, data, axes='TZCXY', dtype=None, bar=False, *args, **kwargs):
+    """ file:       string; filename of the new tiff file
+        data:       2 to 5D numpy array
+        axes:       string; order of dimensions in data, default: TZCXY for 5D, ZCXY for 4D, CXY for 3D, XY for 2D data
+        dtype:      string; datatype to use when saving to tiff
+        bar:        bool; whether to show a progress bar
+        other args: see IJTiffFile
     """
 
     axes = axes[-np.ndim(data):].upper()
@@ -43,7 +38,7 @@ def tiffwrite(file, data, axes='TZCXY', bar=False, colormap=None, pxsize=None):
             data = np.expand_dims(data, e)
 
     shape = data.shape[:3]
-    with IJTiffWriter(file, shape, data.dtype, colormap, pxsize=pxsize) as f:
+    with IJTiffFile(file, shape, data.dtype if dtype is None else dtype, *args, **kwargs) as f:
         at_least_one = False
         for n in tqdm(product(*[range(i) for i in shape]), total=np.prod(shape), desc='Saving tiff', disable=not bar):
             if np.any(data[n]) or not at_least_one:
@@ -51,377 +46,644 @@ def tiffwrite(file, data, axes='TZCXY', bar=False, colormap=None, pxsize=None):
                 at_least_one = True
 
 
-def readheader(b):
-    b.seek(0)
-    byteorder = {b'II': '<', b'MM': '>'}[b.read(2)]
-    bigtiff = {42: False, 43: True}[struct.unpack(byteorder + 'H', b.read(2))[0]]
-
-    if bigtiff:
-        tagsize = 20
-        tagnoformat = 'Q'
-        offsetsize = struct.unpack(byteorder + 'H', b.read(2))[0]
-        offsetformat = {8: 'Q', 16: '2Q'}[offsetsize]
-        assert struct.unpack(byteorder + 'H', b.read(2))[0] == 0, 'Not a TIFF-file'
-        offset = struct.unpack(byteorder + offsetformat, b.read(offsetsize))[0]
-    else:
-        tagsize = 12
-        tagnoformat = 'H'
-        offsetformat = 'I'
-        offsetsize = 4
-        offset = struct.unpack(byteorder + offsetformat, b.read(offsetsize))[0]
-    return byteorder, bigtiff, tagsize, tagnoformat, offsetformat, offsetsize, offset
-
-
-def readifd(b):
-    """ Reads the first IFD of the tiff file in the file handle b
-        wp@tl20200214
-    """
-    byteorder, bigtiff, tagsize, tagnoformat, offsetformat, offsetsize, offset = readheader(b)
-
-    b.seek(offset)
-    nTags = struct.unpack(byteorder + tagnoformat, b.read(struct.calcsize(tagnoformat)))[0]
-    assert nTags < 4096, 'Too many tags'
-    addr = []
-    addroffset = []
-
-    length = 8 if bigtiff else 2
-    length += nTags * tagsize + offsetsize
-
-    tags = {}
-    for i in range(nTags):
-        pos = offset + struct.calcsize(tagnoformat) + tagsize * i
-        b.seek(pos)
-
-        code, ttype = struct.unpack(byteorder + 'HH', b.read(4))
-        count = struct.unpack(byteorder + offsetformat, b.read(offsetsize))[0]
-
-        dtype = tifffile.TIFF.DATA_FORMATS[ttype]
-        dtypelen = struct.calcsize(dtype)
-
-        toolong = struct.calcsize(dtype) * count > offsetsize
-        if toolong:
-            addr.append(b.tell() - offset)
-            caddr = struct.unpack(byteorder + offsetformat, b.read(offsetsize))[0]
-            addroffset.append(caddr - offset)
-            cp = b.tell()
-            b.seek(caddr)
-
-        if ttype == 1:
-            value = b.read(count)
-        elif ttype == 2:
-            value = b.read(count).decode('ascii').rstrip('\x00')
-        elif ttype == 5:
-            value = [struct.unpack(byteorder + dtype, b.read(dtypelen)) for _ in range(count)]
+class Header:
+    def __init__(self, *args):
+        if len(args) == 1:
+            fh = args[0]
+            fh.seek(0)
+            self.byteorder = {b'II': '<', b'MM': '>'}[fh.read(2)]
+            self.bigtiff = {42: False, 43: True}[struct.unpack(self.byteorder + 'H', fh.read(2))[0]]
+            if self.bigtiff:
+                self.tagsize = 20
+                self.tagnoformat = 'Q'
+                self.offsetsize = struct.unpack(self.byteorder + 'H', fh.read(2))[0]
+                self.offsetformat = {8: 'Q', 16: '2Q'}[self.offsetsize]
+                assert struct.unpack(self.byteorder + 'H', fh.read(2))[0] == 0, 'Not a TIFF-file'
+                self.offset = struct.unpack(self.byteorder + self.offsetformat, fh.read(self.offsetsize))[0]
+            else:
+                self.tagsize = 12
+                self.tagnoformat = 'H'
+                self.offsetformat = 'I'
+                self.offsetsize = 4
+                self.offset = struct.unpack(self.byteorder + self.offsetformat, fh.read(self.offsetsize))[0]
         else:
-            value = [struct.unpack(byteorder + dtype, b.read(dtypelen))[0] for _ in range(count)]
+            self.byteorder, self.bigtiff = args if len(args) == 2 else ('<', True)
+            if self.bigtiff:
+                self.tagsize = 20
+                self.tagnoformat = 'Q'
+                self.offsetsize = 8
+                self.offsetformat = 'Q'
+                self.offset = 16
+            else:
+                self.tagsize = 12
+                self.tagnoformat = 'H'
+                self.offsetsize = 4
+                self.offsetformat = 'I'
+                self.offset = 8
 
-        if toolong:
-            b.seek(cp)
-
-        tags[code] = (ttype, value)
-
-    b.seek(offset)
-    return tags
-
-
-def getchunks(frame):
-    with BytesIO(frame) as b:
-        tags = readifd(b)
-        stripoffsets = tags[273][1]
-        stripbytecounts = tags[279][1]
-        chunks = []
-        for o, c in zip(stripoffsets, stripbytecounts):
-            b.seek(o)
-            chunks.append(b.read(c))
-    return stripbytecounts, tags, chunks
-
-
-def fmt_err(exc_info):
-    t, m, tb = exc_info
-    while tb.tb_next:
-        tb = tb.tb_next
-    return 'line {}: {}'.format(tb.tb_lineno, m)
+    def write(self, fh):
+        fh.write({'<': b'II', '>': b'MM'}[self.byteorder])
+        if self.bigtiff:
+            fh.write(struct.pack(self.byteorder + 'H', 43))
+            fh.write(struct.pack(self.byteorder + 'H', 8))
+            fh.write(struct.pack(self.byteorder + 'H', 0))
+            fh.write(struct.pack(self.byteorder + 'Q', self.offset))
+        else:
+            fh.write(struct.pack(self.byteorder + 'H', 42))
+            fh.write(struct.pack(self.byteorder + 'I', self.offset))
 
 
-def multiplexer(files, byteorder, bigtiff, Qo, V, W, E):
-    try:
-        w = {file: writer(file, v['shape'], byteorder, bigtiff, W, v['colormap'], v['dtype'], v['extratags'])
-             for file, v in files.items()}
-        for v in w.values():  # start writing all files
-            next(v)
-        while not V.is_set():  # take frames from queue and write to file
-            try:
-                frame, file, n, fmin, fmax = Qo.get(True, 0.02)
-                w[file].send((frame, n, fmin, fmax))
-            except queues.Empty:
-                continue
-        for v in w.values():  # finish writing files
-            v.close()
-    except Exception:
-        E.put(fmt_err(sys.exc_info()))
+class Tag:
+    tiff_tag_registry = tifffile.TiffTagRegistry({key: value.lower() for key, value in tifffile.TIFF.TAGS.items()})
+
+    @staticmethod
+    def to_tags(tags):
+        return {(key if isinstance(key, Number) else (int(key[3:]) if key.lower().startswith('tag')
+                                       else Tag.tiff_tag_registry[key.lower()])):
+                    tag if isinstance(tag, Tag) else Tag(tag) for key, tag in tags.items()}
+
+    @staticmethod
+    def fraction(numerator=0, denominator=None):
+        return Fraction(numerator, denominator).limit_denominator(2 ** (31 if numerator < 0 or denominator < 0
+                                                                        else 32) - 1)
+
+    def __init__(self, ttype, value=None, offset=None):
+        if value is None:
+            self.value = ttype
+            if all([isinstance(value, int) for value in self.value]):
+                min_value = np.min(self.value)
+                max_value = np.max(self.value)
+                type_map = {'uint8': 'byte', 'int8': 'sbyte', 'uint16': 'short', 'int16': 'sshort',
+                            'uint32': 'long', 'int32': 'slong', 'uint64': 'long8', 'int64': 'slong8'}
+                for dtype, ttype in type_map.items():
+                    if np.iinfo(dtype).min <= min_value and max_value <= np.iinfo(dtype).max:
+                        break
+                    else:
+                        ttype = 'undefined'
+            elif isinstance(self.value, (str, bytes)) or all([isinstance(value, (str, bytes)) for value in self.value]):
+                ttype = 'ascii'
+            elif all([isinstance(value, Fraction) for value in self.value]):
+                if all([value.numerator < 0 or value.denominator < 0 for value in self.value]):
+                    ttype = 'srational'
+                else:
+                    ttype = 'rational'
+            elif all([isinstance(value, (float, int)) for value in self.value]):
+                min_value = np.min(np.asarray(self.value)[np.isfinite(self.value)])
+                max_value = np.max(np.asarray(self.value)[np.isfinite(self.value)])
+                type_map = {'float32': 'float', 'float64': 'double'}
+                for dtype, ttype in type_map.items():
+                    if np.finfo(dtype).min <= min_value and max_value <= np.finfo(dtype).max:
+                        break
+                    else:
+                        ttype = 'undefined'
+            elif all([isinstance(value, complex) for value in self.value]):
+                ttype = 'complex'
+            else:
+                ttype = 'undefined'
+            self.ttype = tifffile.TIFF.DATATYPES[ttype.upper()]
+        else:
+            self.value = value
+            self.ttype = tifffile.TIFF.DATATYPES[ttype.upper()] if isinstance(ttype, str) else ttype
+        self.dtype = tifffile.TIFF.DATA_FORMATS[self.ttype]
+        self.offset = offset
+        self.type_check()
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        self._value = value if isinstance(value, Iterable) else (value,)
+
+    def __repr__(self):
+        if self.offset is None:
+            return f'{tifffile.TIFF.DATATYPES(self.ttype).name}: {self.value}'
+        else:
+            return f'{tifffile.TIFF.DATATYPES(self.ttype).name} @ {self.offset}: {self.value}'
+
+    def type_check(self):
+        try:
+            self.bytes_and_count(Header())
+        except Exception:
+            raise ValueError(f"tif tag type '{tifffile.TIFF.DATATYPES(self.ttype).name}' and "
+                             f"data type '{type(self.value[0]).__name__}' do not correspond")
+
+    def bytes_and_count(self, header):
+        if isinstance(self.value, bytes):
+            return self.value, len(self.value) // struct.calcsize(self.dtype)
+        elif self.ttype in (2, 14):
+            if isinstance(self.value, str):
+                bytes_value = self.value.encode('ascii') + b'\x00'
+            else:
+                bytes_value = b'\x00'.join([value.encode('ascii') for value in self.value]) + b'\x00'
+            return bytes_value, len(bytes_value)
+        elif self.ttype in (5, 10):
+            return b''.join([struct.pack(header.byteorder + self.dtype,
+                                         *((value.denominator, value.numerator) if isinstance(value, Fraction)
+                                           else value)) for value in self.value]), len(self.value)
+        else:
+            return b''.join([struct.pack(header.byteorder + self.dtype, value) for value in self.value]), \
+                   len(self.value)
+
+    def write_tag(self, fh, key, header, offset=None):
+        self.fh = fh
+        self.header = header
+        if offset is None:
+            self.offset = fh.tell()
+        else:
+            fh.seek(offset)
+            self.offset = offset
+        fh.write(struct.pack(header.byteorder + 'HH', key, self.ttype))
+        bytes_tag, count = self.bytes_and_count(header)
+        fh.write(struct.pack(header.byteorder + header.offsetformat, count))
+        len_bytes = len(bytes_tag)
+        if len_bytes <= header.offsetsize:
+            fh.write(bytes_tag)
+            self.bytes_data = None
+            empty_bytes = header.offsetsize - len_bytes
+        else:
+            self.bytes_data = bytes_tag
+            empty_bytes = header.offsetsize
+        if empty_bytes:
+            fh.write(empty_bytes * b'\x00')
+
+    def write_data(self, write=None):
+        if self.bytes_data:
+            self.fh.seek(0, 2)
+            if write is None:
+                offset = self.write(self.bytes_data)
+            else:
+                offset = write(self.fh, self.bytes_data)
+            self.fh.seek(self.offset + self.header.tagsize - self.header.offsetsize)
+            self.fh.write(struct.pack(self.header.byteorder + self.header.offsetformat, offset))
+
+    def write(self, bytes_value):
+        if self.fh.tell() % 2:
+            self.fh.write(b'\x00')
+        offset = self.fh.tell()
+        self.fh.write(bytes_value)
+        return offset
+
+    def copy(self):
+        return self.__class__(self.ttype, self.value[:], self.offset)
 
 
-def writer(file, shape, byteorder, bigtiff, W, colormap=None, dtype=None, extratags=None):
-    """ Writes a tiff file, writer function for IJTiffWriter
-        file:      filename of the new tiff file
-        shape:     shape (CZT) of the data to be written
-        byteorder: byteorder of the file to be written, '<' or '>'
-        bigtiff:   False: file will be normal tiff, True: file will be bigtiff
-        Qo:        Queue from which to take the compressed frames for writing
-        V:         Value; 1 when more frames need to be written, 0 when writer can finish
-        W:         Value in which writer will log how many frames are written
-        colormap:  array with 2^bitspersample x 3 values RGB
+class IFD(dict):
+    def __init__(self, fh=None):
+        super().__init__()
+        if fh is not None:
+            header = Header(fh)
+            fh.seek(header.offset)
+            n_tags = struct.unpack(header.byteorder + header.tagnoformat,
+                                   fh.read(struct.calcsize(header.tagnoformat)))[0]
+            assert n_tags < 4096, 'Too many tags'
+            addr = []
+            addroffset = []
+
+            length = 8 if header.bigtiff else 2
+            length += n_tags * header.tagsize + header.offsetsize
+
+            for i in range(n_tags):
+                pos = header.offset + struct.calcsize(header.tagnoformat) + header.tagsize * i
+                fh.seek(pos)
+
+                code, ttype = struct.unpack(header.byteorder + 'HH', fh.read(4))
+                count = struct.unpack(header.byteorder + header.offsetformat, fh.read(header.offsetsize))[0]
+
+                dtype = tifffile.TIFF.DATA_FORMATS[ttype]
+                dtypelen = struct.calcsize(dtype)
+
+                toolong = struct.calcsize(dtype) * count > header.offsetsize
+                if toolong:
+                    addr.append(fh.tell() - header.offset)
+                    caddr = struct.unpack(header.byteorder + header.offsetformat, fh.read(header.offsetsize))[0]
+                    addroffset.append(caddr - header.offset)
+                    cp = fh.tell()
+                    fh.seek(caddr)
+
+                if ttype == 1:
+                    value = fh.read(count)
+                elif ttype == 2:
+                    value = fh.read(count).decode('ascii').rstrip('\x00')
+                elif ttype in (5, 10):
+                    value = [struct.unpack(header.byteorder + dtype, fh.read(dtypelen)) for _ in range(count)]
+                else:
+                    value = [struct.unpack(header.byteorder + dtype, fh.read(dtypelen))[0] for _ in range(count)]
+
+                if toolong:
+                    fh.seek(cp)
+
+                self[code] = Tag(ttype, value, pos)
+            fh.seek(header.offset)
+
+    def __setitem__(self, key, tag):
+        super().__setitem__(Tag.tiff_tag_registry[key.lower()] if isinstance(key, str) else key,
+                            tag if isinstance(tag, Tag) else Tag(tag))
+
+    def items(self):
+        return ((key, self[key]) for key in sorted(self))
+
+    def keys(self):
+        return (key for key in sorted(self))
+
+    def values(self):
+        return (self[key] for key in sorted(self))
+
+    def write(self, fh, header, write=None):
+        self.fh = fh
+        self.header = header
+        if fh.seek(0, 2) % 2:
+            fh.write(b'\x00')
+        self.offset = fh.tell()
+        fh.write(struct.pack(header.byteorder + header.tagnoformat, len(self)))
+        for key, tag in self.items():
+            tag.write_tag(fh, key, header)
+        self.where_to_write_next_ifd_offset = fh.tell()
+        fh.write(b'\x00' * header.offsetsize)
+        for tag in self.values():
+            tag.write_data(write)
+        return fh
+
+    def write_offset(self, where_to_write_offset):
+        self.fh.seek(where_to_write_offset)
+        self.fh.write(struct.pack(self.header.byteorder + self.header.offsetformat, self.offset))
+
+    def copy(self):
+        new = self.__class__()
+        new.update({key: tag.copy() for key, tag in self.items()})
+        return new
+
+
+class IJTiffFile:
+    """ Writes a tiff file in a format that the BioFormats reader in Fiji understands.
+        file:           filename of the new tiff file
+        shape:          shape (CZT) of the data to be written
+        dtype:          datatype to use when saving to tiff
+        colors:         a tuple with a color per channel, chosen from matplotlib.colors, html colors are also possible
+        colormap:       name of a colormap from colorcet
+        pxsize:         pixel size in um
+        deltaz:         z slice interval in um
+        timeinterval:   time between frames in seconds
+        extratags:      other tags to be saved, example: Artist='John Doe', Tag4567=[400, 500]
+                            or Copyright=Tag('ascii', 'Made by me'). See tiff_tag_registry.items().
         wp@tl20200214
     """
+    def __init__(self, path, shape, dtype='uint16', colors=None, colormap=None, pxsize=None, deltaz=None,
+                 timeinterval=None, **extratags):
+        assert len(shape) >= 3, 'please specify all c, z, t for the shape'
+        assert len(shape) <= 3, 'please specify only c, z, t for the shape'
+        assert np.dtype(dtype).char in 'BbHhf', 'datatype not supported'
+        assert colors is None or colormap is None, 'cannot have colors and colormap simultaneously'
 
-    spp = shape[0] if colormap is None else 1  # samples/pixel
-    nframes = np.prod(shape[1:]) if colormap is None else np.prod(shape)
-    offsetformat, offsetsize, tagnoformat, tagsize = (('I', 4, 'H', 8), ('Q', 8, 'Q', 20))[bigtiff]
-    strips = {}
-    tags = {}
-    hashes = {}
-    N = []
+        self.path = path
+        self.shape = shape
+        self.dtype = np.dtype(dtype)
+        self.colors = colors
+        self.colormap = colormap
+        self.pxsize = pxsize
+        self.deltaz = deltaz
+        self.timeinterval = timeinterval
+        self.extratags = {} if extratags is None else Tag.to_tags(extratags)
+        if pxsize is not None:
+            pxsize = Tag.fraction(pxsize)
+            self.extratags.update({282: Tag(pxsize), 283: Tag(pxsize)})
 
-    def hashcheck(bvalue, offset):
+        self.header = Header()
+        self.frames = []
+        self.spp = self.shape[0] if self.colormap is None and self.colors is None else 1  # samples/pixel
+        self.nframes = np.prod(self.shape[1:]) if self.colormap is None and self.colors is None else np.prod(self.shape)
+        self.offsets = {}
+        self.fh = FileHandle(path, 'w+b')
+        self.namespace_manager = multiprocessing.Manager()
+        self.hashes = self.namespace_manager.dict()
+        self.strips = {}
+        self.ifds = {}
+        self.frame_extra_tags = {}
+        self.frames_added = []
+        self.frames_written = []
+        self.main_pid = multiprocessing.current_process().pid
+        self.pool_manager = PoolManager(self)
+        with self.fh.lock() as fh:
+            self.header.write(fh)
+
+    def __hash__(self):
+        return hash(self.path)
+
+    def get_frame_number(self, n):
+        if self.colormap is None and self.colors is None:
+            return n[1] + n[2] * self.shape[1], n[0]
+        else:
+            return n[0] + n[1] * self.shape[0] + n[2] * self.shape[0] * self.shape[1], 0
+
+    def ij_tiff_frame(self, frame):
+        with BytesIO() as framedata:
+            with tifffile.TiffWriter(framedata, self.header.bigtiff, self.header.byteorder) as t:
+                # predictor=True might save a few bytes, but requires the package imagecodes to save floats
+                t.write(frame, compression=(8, 9), contiguous=True, predictor=False)
+            return framedata.getvalue()
+
+    def save(self, frame, c, z, t, **extratags):
+        """ save a 2d numpy array to the tiff at channel=c, slice=z, time=t, with optional extra tif tags
+        """
+        assert (c, z, t) not in self.frames_written, f'frame {c} {z} {t} is added already'
+        assert all([0 <= i < s for i, s in zip((c, z, t), self.shape)]), \
+            'frame {} {} {} is outside shape {} {} {}'.format(c, z, t, *self.shape)
+        self.frames_added.append((c, z, t))
+        self.pool_manager.add_frame(self.path, frame.astype(self.dtype), (c, z, t))
+        if extratags:
+            self.frame_extra_tags[(c, z, t)] = Tag.to_tags(extratags)
+
+    @cached_property
+    def loader(self):
+        tif = self.ij_tiff_frame(np.zeros((8, 8), self.dtype))
+        with BytesIO(tif) as fh:
+            return tif, Header(fh), IFD(fh)
+
+    def load(self, *n):
+        """ read back a frame that's just written
+            useful for simulating a large number of frames without using much memory
+        """
+        if n not in self.frames_added:
+            raise KeyError(f'frame {n} has not been added yet')
+        while n not in self.frames_written:
+            self.pool_manager.get_ifds_from_queue()
+        tif, header, ifd = self.loader
+        framenumber, channel = self.get_frame_number(n)
+        with BytesIO(tif) as fh:
+            fh.seek(0, 2)
+            fstripbyteoffsets, fstripbytecounts = [], []
+            with open(self.path, 'rb') as file:
+                for stripbyteoffset, stripbytecount in zip(*self.strips[(framenumber, channel)]):
+                    file.seek(stripbyteoffset)
+                    bdata = file.read(stripbytecount)
+                    fstripbyteoffsets.append(fh.tell())
+                    fstripbytecounts.append(len(bdata))
+                    fh.write(bdata)
+            ifd = ifd.copy()
+            for key, value in zip((257, 256, 278, 270, 273, 279),
+                                  (*self.frame_shape, self.frame_shape[0] // len(fstripbyteoffsets),
+                                   f'{{"shape": [{self.frame_shape[0]}, {self.frame_shape[1]}]}}',
+                                   fstripbyteoffsets, fstripbytecounts)):
+                tag = ifd[key]
+                tag.value = value
+                tag.write_tag(fh, key, header, tag.offset)
+                tag.write_data()
+            fh.seek(0)
+            return tifffile.TiffFile(fh).asarray()
+
+    @property
+    def description(self):
+        desc = ['ImageJ=1.11a']
+        if self.colormap is None and self.colors is None:
+            desc.extend((f'images={np.prod(self.shape[:1])}', f'slices={self.shape[1]}', f'frames={self.shape[2]}'))
+        else:
+            desc.extend((f'images={np.prod(self.shape)}', f'channels={self.shape[0]}', f'slices={self.shape[1]}',
+                         f'frames={self.shape[2]}'))
+        desc.extend(('hyperstack=true', 'mode=grayscale', 'loop=false', 'unit=micron'))
+        if self.deltaz is not None:
+            desc.append(f'spacing={self.deltaz}')
+        if self.timeinterval is not None:
+            desc.append(f'finterval={self.timeinterval}')
+        return bytes('\n'.join(desc), 'ascii')
+
+    @cached_property
+    def empty_frame(self):
+        ifd = self.ifds[list(self.ifds.keys())[-1]].copy()
+        return self.compress_frame(np.zeros((ifd[257].value[0], ifd[256].value[0]), self.dtype))
+
+    @cached_property
+    def frame_shape(self):
+        ifd = self.ifds[list(self.ifds.keys())[-1]].copy()
+        return ifd[257].value[0], ifd[256].value[0]
+
+    def add_empty_frame(self, n):
+        framenr, channel = self.get_frame_number(n)
+        ifd, strips = self.empty_frame
+        self.ifds[framenr] = ifd.copy()
+        self.strips[(framenr, channel)] = strips
+
+    @cached_property
+    def colormap_bytes(self):
+        colormap = getattr(colorcet, self.colormap)
+        colormap[0] = '#ffffff'
+        colormap[-1] = '#000000'
+        colormap = 65535 * np.array(
+            [[int(''.join(i), 16) for i in zip(*[iter(s[1:])] * 2)] for s in colormap]) // 255
+        if np.dtype(self.dtype).itemsize == 2:
+            colormap = np.tile(colormap, 256).reshape((-1, 3))
+        return b''.join([struct.pack(self.header.byteorder + 'H', c) for c in colormap.T.flatten()])
+
+    @cached_property
+    def colors_bytes(self):
+        return [b''.join([struct.pack(self.header.byteorder + 'H', c)
+                          for c in np.linspace(0, 65535 * np.array(mpl_colors.to_rgb(color)),
+                                               65536 if np.dtype(self.dtype).itemsize == 2 else 256,
+                                               dtype=int).T.flatten()]) for color in self.colors]
+
+    def close(self):
+        assert len(self.frames_added) >= 1, 'at least one frame should be added to the tiff'
+        if multiprocessing.current_process().pid == self.main_pid:
+            self.pool_manager.close(self)
+            with self.fh.lock() as fh:
+                if len(self.frames_written) < np.prod(self.shape):  # add empty frames if needed
+                    for n in product(*[range(i) for i in self.shape]):
+                        if n not in self.frames_written:
+                            self.add_empty_frame(n)
+
+                for n, tags in self.frame_extra_tags.items():
+                    framenr, channel = self.get_frame_number(n)
+                    self.ifds[framenr].update(tags)
+                if self.colormap is not None:
+                    self.ifds[0][320] = Tag('SHORT', self.colormap_bytes)
+                    self.ifds[0][262] = Tag('SHORT', 3)
+                if self.colors is not None:
+                    for c, color in enumerate(self.colors_bytes):
+                        self.ifds[c][320] = Tag('SHORT', color)
+                        self.ifds[c][262] = Tag('SHORT', 3)
+                if 306 not in self.ifds[0]:
+                    self.ifds[0][306] = Tag('ASCII', datetime.now().strftime('%Y:%m:%d %H:%M:%S'))
+                for framenr in range(self.nframes):
+                    stripbyteoffsets, stripbytecounts = zip(*[self.strips[(framenr, channel)]
+                                                              for channel in range(self.spp)])
+                    self.ifds[framenr][258].value = self.spp * self.ifds[framenr][258].value
+                    self.ifds[framenr][270] = Tag('ASCII', self.description)
+                    self.ifds[framenr][273] = Tag('LONG8', sum(stripbyteoffsets, []))
+                    self.ifds[framenr][277] = Tag('SHORT', self.spp)
+                    self.ifds[framenr][279] = Tag('LONG8', sum(stripbytecounts, []))
+                    self.ifds[framenr][305] = Tag('ASCII', 'tiffwrite_tllab_NKI')
+                    if self.extratags is not None:
+                        self.ifds[framenr].update(self.extratags)
+                    if self.colormap is None and self.colors is None and self.shape[0] > 1:
+                        self.ifds[framenr][284] = Tag('SHORT', 2)
+                    self.ifds[framenr].write(fh, self.header, self.write)
+                    if framenr:
+                        self.ifds[framenr].write_offset(self.ifds[framenr - 1].where_to_write_next_ifd_offset)
+                    else:
+                        self.ifds[framenr].write_offset(self.header.offset - self.header.offsetsize)
+            fh.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        self.close()
+
+    @staticmethod
+    def hash_check(fh, bvalue, offset):
         addr = fh.tell()
         fh.seek(offset)
         same = bvalue == fh.read(len(bvalue))
         fh.seek(addr)
         return same
 
-    def frn(n):
-        if colormap is None:
-            return n[1] + n[2] * shape[1], n[0]
+    def write(self, fh, bvalue):
+        hash_value = hash(bvalue)
+        if hash_value in self.hashes and self.hash_check(fh, bvalue, self.hashes[hash_value]):
+            return self.hashes[hash_value]  # reuse previously saved data
         else:
-            return n[0] + n[1] * shape[0] + n[2] * shape[0] * shape[1], 0
+            if fh.tell() % 2:
+                fh.write(b'\x00')
+            offset = fh.tell()
+            self.hashes[hash_value] = offset
+            fh.write(bvalue)
+            return offset
 
-    def addframe(frame, n):
-        framenr, channel = frn(n)
-        stripbytecounts, tags[framenr], chunks = getchunks(frame)
+    def compress_frame(self, frame):
+        """ This is run in a different process"""
+        stripbytecounts, ifd, chunks = self.get_chunks(self.ij_tiff_frame(frame))
         stripbyteoffsets = []
-        for c in chunks:
-            hc = hash(c)
-            if hc in hashes and hashcheck(c, hashes[hc]):  # reuse previously saved data
-                stripbyteoffsets.append(hashes[hc])
-            else:
-                if fh.tell() % 2:
-                    fh.write(b'\x00')
-                stripbyteoffsets.append(fh.tell())
-                hashes[hc] = stripbyteoffsets[-1]
-                fh.write(c)  # write the data now, ifds later
+        with self.fh.lock() as fh:
+            for chunk in chunks:
+                stripbyteoffsets.append(self.write(fh, chunk))
+        return ifd, (stripbyteoffsets, stripbytecounts)
 
-        strips[(framenr, channel)] = (stripbyteoffsets, stripbytecounts)
-        W.value += 1
-        N.append(n)
-        return framenr, channel
+    @staticmethod
+    def get_chunks(frame):
+        with BytesIO(frame) as fh:
+            ifd = IFD(fh)
+            stripoffsets = ifd[273].value
+            stripbytecounts = ifd[279].value
+            chunks = []
+            for stripoffset, stripbytecount in zip(stripoffsets, stripbytecounts):
+                fh.seek(stripoffset)
+                chunks.append(fh.read(stripbytecount))
+        return stripbytecounts, ifd, chunks
 
-    def addtag(code, ttype, value):
-        if isinstance(ttype, str):
-            ttype = tifffile.TIFF.DATATYPES[ttype.upper()]
-        dtype = tifffile.TIFF.DATA_FORMATS[ttype]
-        count = len(value) // struct.calcsize(dtype) if isinstance(value, (bytes, str)) else len(value)
-        offset = fh.tell()
 
-        fh.write(struct.pack(byteorder + 'HH', code, ttype))
-        fh.write(struct.pack(byteorder + offsetformat, count))
-        if isinstance(value, bytes):
-            bvalue = value
-        elif isinstance(value, str):
-            bvalue = value.encode('ascii')
-        elif ttype == 5:
-            bvalue = b''.join([struct.pack(byteorder + dtype, *v) for v in value])
-        else:
-            bvalue = b''.join([struct.pack(byteorder + dtype, v) for v in value])
-        if len(bvalue) <= offsetsize:
-            fh.write(bvalue)
-            tagdata = None
-        else:
-            tagdata = (fh.tell(), bvalue)
-        fh.seek(offset + tagsize)
-        return tagdata
+class PoolManager:
+    instance = None
 
-    def addtagdata(addr, bvalue):
-        if fh.tell() % 2:
-            fh.write(b'\x00')
-        hc = hash(bvalue)
-        if hc in hashes and hashcheck(bvalue, hashes[hc]):
-            tagoffset = hashes[hc]
-        else:
-            tagoffset = fh.tell()
-            hashes[hc] = tagoffset
-            fh.write(bvalue)
-        fh.seek(addr)
-        fh.write(struct.pack(byteorder + offsetformat, tagoffset))
-        fh.seek(0, 2)
+    def __new__(cls, *args, **kwargs):
+        if cls.instance is None:
+            cls.instance = super().__new__(cls)
+        return cls.instance
 
-    if colormap is None:
-        description = \
-            'ImageJ=1.11a\nimages={}\nslices={}\nframes={}\nhyperstack=true\nmode=grayscale\nloop=false\n'. \
-                format(np.prod(shape[1:]), *shape[1:])
-    else:
-        description = \
-            'ImageJ=1.11a\nimages={}\nchannels={}\nslices={}\nframes={}\nhyperstack=true\nmode=grayscale\nloop=false\n'. \
-                format(np.prod(shape), *shape)
-    try:
-        description = bytes(description, 'ascii')  # python 3
-    except:
-        pass
+    def __init__(self, tif, processes=None):
+        if not hasattr(self, 'tifs'):
+            self.tifs = {}
+        if not hasattr(self, 'is_alive'):
+            self.is_alive = False
+        if self.is_alive:
+            raise ValueError('Cannot start new tifffile until previous tifffiles have been closed.')
+        self.tifs[tif.path] = tif
+        self.processes = processes
 
-    with open(file, 'w+b') as fh:
+    def close(self, tif):
+        while len(tif.frames_written) < len(tif.frames_added):
+            self.get_ifds_from_queue()
+        self.tifs.pop(tif.path)
+        if not self.tifs:
+            self.__class__.instance = None
+            self.is_alive = False
+            self.done.set()
+            while not self.queue.empty():
+                self.queue.get()
+            self.queue.close()
+            self.queue.join_thread()
+            while not self.error_queue.empty():
+                print(self.error_queue.get())
+            self.error_queue.close()
+            self.ifd_queue.close()
+            self.ifd_queue.join_thread()
+            self.pool.close()
+            self.pool.join()
+
+    def get_ifds_from_queue(self):
+        while not self.ifd_queue.empty():
+            file, n, ifd, strip = self.ifd_queue.get()
+            framenr, channel = self.tifs[file].get_frame_number(n)
+            self.tifs[file].ifds[framenr] = ifd
+            self.tifs[file].strips[(framenr, channel)] = strip
+            self.tifs[file].frames_written.append(n)
+
+    def add_frame(self, *args):
+        if not self.is_alive:
+            self.start_pool()
+        self.get_ifds_from_queue()
+        self.queue.put(args)
+
+    def start_pool(self):
+        self.is_alive = True
+        nframes = sum([np.prod(tif.shape) for tif in self.tifs.values()])
+        self.processes = self.processes or max(2, min(multiprocessing.cpu_count() // 6, nframes))
+        self.queue = multiprocessing.Queue(10 * self.processes)
+        self.ifd_queue = multiprocessing.Queue(10 * self.processes)
+        self.error_queue = multiprocessing.Queue()
+        self.offsets_queue = multiprocessing.Queue()
+        self.done = multiprocessing.Event()
+        self.pool = multiprocessing.Pool(self.processes, self.run)
+
+    def run(self):
+        """ Only this is run in parallel processes. """
         try:
-            fh.write({'<': b'II', '>': b'MM'}[byteorder])
-            if bigtiff:
-                offset = 16
-                fh.write(struct.pack(byteorder + 'H', 43))
-                fh.write(struct.pack(byteorder + 'H', 8))
-                fh.write(struct.pack(byteorder + 'H', 0))
-                fh.write(struct.pack(byteorder + 'Q', offset))
-            else:
-                offset = 8
-                fh.write(struct.pack(byteorder + 'H', 42))
-                fh.write(struct.pack(byteorder + 'I', offset))
-
-            fminmax = np.tile((np.inf, -np.inf), (shape[0], 1))
-            while True:
-                frame, n, fmin, fmax = yield
-                fminmax[n[0]] = min(fminmax[n[0]][0], fmin), max(fminmax[n[0]][1], fmax)
-                addframe(frame, n)
-        except GeneratorExit:
-            if dtype.kind == 'i':
-                dmin, dmax = np.iinfo(dtype).min, np.iinfo(dtype).max
-            else:
-                dmin, dmax = 0, 65535
-            fminmax[np.isposinf(fminmax)] = dmin
-            fminmax[np.isneginf(fminmax)] = dmax
-            for i in range(fminmax.shape[0]):
-                if fminmax[i][0] == fminmax[i][1]:
-                    fminmax[i] = dmin, dmax
-
-            if len(N) < np.prod(shape):  # add empty frames if needed
-                empty_frame = None
-                for n in product(*[range(i) for i in shape]):
-                    if not n in N:
-                        framenr, channel = frn(n)
-                        if empty_frame is None:
-                            tag = tags[framenr] if framenr in tags.keys() else tags[list(tags.keys())[-1]]
-                            frame = IJTiffFrame(np.zeros(tag[257][1] + tag[256][1], dtype), byteorder, bigtiff)
-                            empty_frame = addframe(frame, n)
-                        else:
-                            strips[(framenr, channel)] = strips[empty_frame]
-                            if not framenr in tags.keys():
-                                tags[framenr] = tags[empty_frame[0]]
-
-            offset_addr = offset - offsetsize
-
-            if not colormap is None:
-                tags[0][320] = (3, get_colormap(colormap, dtype, byteorder))
-                tags[0][262] = (3, [3])
-
-            # unfortunately, ImageJ doesn't read this from bigTiff, maybe we'll figure out how to force IJ in the future
-            for tag in tifffile.tifffile.imagej_metadata_tag(
-                    {'Ranges': tuple(fminmax.flatten().astype(int))}, byteorder):
-                tags[0][tag[0]] = ({50839: 1, 50838: 4}[tag[0]], tag[3])
-
-            for framenr in range(nframes):
-                stripbyteoffsets, stripbytecounts = zip(*[strips[(framenr, channel)] for channel in range(spp)])
-                tp, value = tags[framenr][258]
-                tags[framenr][258] = (tp, spp * value)
-                tags[framenr][270] = (2, description)
-                tags[framenr][273] = (16, sum(stripbyteoffsets, []))
-                tags[framenr][277] = (3, [spp])
-                tags[framenr][279] = (16, sum(stripbytecounts, []))
-                tags[framenr][305] = (2, b'tiffwrite_tllab_NKI')
-                if extratags is not None:
-                    tags[framenr].update(extratags)
-                if colormap is None and shape[0] > 1:
-                    tags[framenr][284] = (3, [2])
-
-                # write offset to this ifd in the previous one
-                if fh.tell() % 2:
-                    fh.write(b'\x00')
-                offset = fh.tell()
-                fh.seek(offset_addr)
-                fh.write(struct.pack(byteorder + offsetformat, offset))
-
-                # write ifd
-                fh.seek(offset)
-                fh.write(struct.pack(byteorder + tagnoformat, len(tags[framenr])))
-                tagdata = [addtag(code, *tags[framenr][code]) for code in sorted(tags[framenr].keys())]
-                offset_addr = fh.tell()
-                fh.write(b'\x00' * offsetsize)
-                for i in [j for j in tagdata if j is not None]:
-                    addtagdata(*i)
-            fh.seek(offset_addr)
-            fh.write(struct.pack(byteorder + tagnoformat, 0))
+            while not self.done.is_set():
+                try:
+                    file, frame, n = self.queue.get(True, 0.02)
+                    self.ifd_queue.put((file, n, *self.tifs[file].compress_frame(frame)))
+                except multiprocessing.queues.Empty:
+                    continue
+        except Exception:
+            print_exc()
+            self.error_queue.put(format_exc())
 
 
-def IJTiffFrame(frame, byteorder, bigtiff):
-    with BytesIO() as framedata:
-        with tifffile.TiffWriter(framedata, bigtiff, byteorder) as t:
-            t.save(frame, compress=9, contiguous=True)
-        return framedata.getvalue()
+class FileHandle:
+    """ Process safe file handle """
+    def __init__(self, name, mode='rb'):
+        self.name = name
+        self.mode = mode
+        self._lock = multiprocessing.RLock()
+        self._fh = open(name, mode, 0)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        self.close()
+
+    def close(self):
+        self._fh.close()
+
+    @contextmanager
+    def lock(self):
+        self._lock.acquire()
+        try:
+            yield self._fh
+        finally:
+            self._lock.release()
 
 
-def compressor(byteorder, bigtiff, Qi, Qo, V, E):
-    """ Compresses tiff frames
-        byteorder: byteorder of the file to be written, '<' or '>'
-        bigtiff:   False: file will be normal tiff, True: file will be bigtiff
-        Qi:        Queue from which new frames which need to be compressed are taken
-        Qo:        Queue where compressed frames are stored
-        V:         Value; 1 when more frames need to be compressed, 0 when compressor can finish
-    """
-    try:
-        while not V.is_set():
-            try:
-                frame, file, n = Qi.get(True, 0.02)
-                if isinstance(frame, tuple):
-                    fun, args, kwargs = frame[:3]
-                    frame = fun(*args, **kwargs)
-                fmin = frame.flatten()
-                fmin = fmin[fmin > 0]
-                fmin = np.nanmin(fmin) if len(fmin) else np.inf
-                fmax = np.nanmax(frame)
-                Qo.put((IJTiffFrame(frame, byteorder, bigtiff), file, n, fmin, fmax))
-            except queues.Empty:
-                continue
-    except Exception:
-        E.put(fmt_err(sys.exc_info()))
-
-
-class IJTiffWriter():
-    """ Class for writing ImageJ big tiff files using good compression and multiprocessing to compress quickly
-        Usage:
-            with IJTiffWriter(file, shape) as t:
-                t.save(frame, c, z, t)
-
-        file: string; filename of the new tiff file, or list of filenames.
-        shape: iterable; shape (C, Z, T) of data to be written in file, or list of shapes.
-        dtype: cast data to dtype before saving, only (u)int8, (u)int16 and float32 are supported.
-        colormap: string; choose any colormap from the colorcet module.
-        nP: int; number of compressor workers to use
-        extratags: dict {int tagnr: (int type, data)}, extra tags to save on every frame, will cause a crash if not used correctly!
-        pxsize:   float; set tiff tag so ImageJ can read the pixel size (in um).
-
-        frame:    2D numpy array with data
-        c, z, t: channel, z, time coordinates of the frame
-    """
-
-    # TODO: better error handling
-    # TODO: extratags per frame, handled by save method
-    # TODO: extratags sanity check
-
+class IJTiffWriter:
     def __init__(self, file, shape, dtype='uint16', colormap=None, nP=None, extratags=None, pxsize=None):
+        warn('IJTiffWriter is deprecated and will be removed in a future version, use IJTiffFile instead',
+             DeprecationWarning)
         files = [file] if isinstance(file, str) else file
         shapes = [shape] if isinstance(shape[0], Number) else shape  # CZT
         dtypes = [np.dtype(dtype)] if isinstance(dtype, (str, np.dtype)) else [np.dtype(d) for d in dtype]
         colormaps = [colormap] if colormap is None or isinstance(colormap, str) else colormap
         extratagss = [extratags] if extratags is None or isinstance(extratags, dict) else extratags
         pxsizes = [pxsize] if pxsize is None or isinstance(pxsize, Number) else pxsize
-        for i, pxsize in enumerate(pxsizes):
-            if pxsize is not None:
-                res = Fraction(pxsize).limit_denominator(2 ** 31 - 1)
-                res = [res.denominator, res.numerator]
-                extratagss[i] = {**(extratagss[i] or {}), **{282: (5, [res]), 283: (5, [res])}}
 
         nFiles = len(files)
         if not len(shapes) == nFiles:
@@ -432,89 +694,34 @@ class IJTiffWriter():
             colormaps *= nFiles
         if not len(extratagss) == nFiles:
             extratagss *= nFiles
+        if not len(pxsizes) == nFiles:
+            pxsizes *= nFiles
 
-        self.files = OrderedDict((file,
-                    {'shape': shape, 'dtype': dtype, 'colormap': colormap, 'frames': [], 'extratags': extratags})
-                    for file, shape, dtype, colormap, extratags in zip(files, shapes, dtypes, colormaps, extratagss)
-                                 if len(file))
+        self.files = {file: IJTiffFile(file, shape, dtype, None, colormap, pxsize, **(extratags or {}))
+                      for file, shape, dtype, colormap, pxsize, extratags
+                      in zip(files, shapes, dtypes, colormaps, pxsizes, extratagss)}
 
         assert np.all([len(s) == 3 for s in shapes]), 'please specify all c, z, t for the shape'
         assert np.all([d.char in 'BbHhf' for d in dtypes]), 'datatype not supported'
-        self.bigtiff = True  # normal tiff also possible, but should be opened by bioformats in ImageJ
-        self.byteorder = '<'
-        self.nP = nP or max(2, min(cpu_count() // 6, np.prod(shape)))
-        self.Qi = Queue(10 * self.nP)
-        self.Qo = Queue(10 * self.nP)
-        self.E = Queue()
-        self.V = Event()
-        self.W = Value('i', 0)
-        self.Compressor = Pool(self.nP, compressor, (self.byteorder, self.bigtiff, self.Qi, self.Qo, self.V, self.E))
-        self.Writer = Process(target=multiplexer, args=(self.files, self.byteorder, self.bigtiff, self.Qo, self.V,
-                                                        self.W, self.E))
-        self.Writer.start()
-
-    @dispatch(object, Number, Number, Number)
-    def save(self, frame, *n):
-        self.save(next(iter(self.files.keys())), frame, *n)
-
-    @dispatch(Number, object, Number, Number, Number)
-    def save(self, filenr, frame, *n):
-        self.save(list(self.files.keys())[filenr], frame, *n)
-
-    @dispatch(str, object, Number, Number, Number)
-    def save(self, file, frame, *n):
-        assert file in self.files, 'file was not opened by {}'.format(self)
-        assert n not in self.files[file]['frames'], 'frame {} {} {} is present already'.format(*n)
-        assert all([0 <= i < s for i, s in zip(n, self.files[file]['shape'])]), \
-            'frame {} {} {} is outside shape {} {} {}'.format(n[0], n[1], n[2], *self.files[file]['shape'])
-        if not self.E.empty():
-            print(self.E.get())
-        # fun, args, kwargs, dshape = frame
-        if not isinstance(frame, tuple):
-            assert frame.ndim == 2, 'data must be 2 dimensional'
-            if not self.files[file]['dtype'] is None:
-                frame = frame.astype(self.files[file]['dtype'])
-        self.files[file]['frames'].append(n)
-        self.Qi.put((frame, file, n))
-
-    def close(self):
-        nFrames = sum([len(v['frames']) for v in self.files.values()])
-        if self.W.value < nFrames:
-            with tqdm(total=nFrames, leave=False, desc='Finishing writing frames',
-                      disable=(nFrames - self.W.value) < 100) as bar:
-                while self.W.value < nFrames:
-                    if not self.E.empty():
-                        print(self.E.get())
-                        break
-                    bar.n = self.W.value
-                    bar.refresh()
-                    sleep(0.02)
-                bar.n = sum([len(v['frames']) for v in self.files.values()])
-                bar.refresh()
-
-        self.V.set()
-        while not self.Qi.empty():
-            self.Qi.get()
-        self.Qi.close()
-        self.Qi.join_thread()
-        while not self.Qo.empty():
-            self.Qo.get()
-        self.Qo.close()
-        self.Qo.join_thread()
-        while not self.E.empty():
-            print(self.E.get())
-        self.E.close()
-        self.Compressor.close()
-        self.Compressor.join()
-        self.Writer.join(5)
-        if self.Writer.is_alive():
-            self.Writer.terminate()
-            self.Writer.join(5)
-            if self.Writer.is_alive():
-                print('Writer process won''t close.')
 
     def __enter__(self):
         return self
 
     def __exit__(self, *args, **kwargs):
         self.close()
+
+    def save(self, file, frame, *n):
+        if isinstance(file, np.ndarray):  # save to first/only file
+            n = (frame, *n)
+            frame = file
+            file = next(iter(self.files.keys()))
+        elif isinstance(file, Number):
+            file = list(self.files.keys())[int(file)]
+        self.files[file].save(frame, *n)
+
+    def close(self):
+        for file in self.files.values():
+            try:
+                file.close()
+            except Exception:
+                print_exc()
