@@ -104,8 +104,8 @@ class Tag:
 
     @staticmethod
     def fraction(numerator=0, denominator=None):
-        return Fraction(numerator, denominator).limit_denominator(2 ** (31 if numerator < 0 or denominator < 0
-                                                                        else 32) - 1)
+        return Fraction(numerator, denominator).limit_denominator(2 ** (31 if numerator < 0 or
+                                                             (denominator is not None and denominator < 0) else 32) - 1)
 
     def __init__(self, ttype, value=None, offset=None):
         if value is None:

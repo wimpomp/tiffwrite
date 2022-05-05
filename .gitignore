@@ -1,4 +1,4 @@
 /build/
 /dist/
-*.egg_info
 /.idea/
+/tiffwrite.egg-info/
