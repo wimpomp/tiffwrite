@@ -440,7 +440,7 @@ class IJTiffFile:
         else:
             desc.extend((f'images={np.prod(self.shape)}', f'channels={self.shape[0]}', f'slices={self.shape[1]}',
                          f'frames={self.shape[2]}'))
-        desc.extend(('hyperstack=true', 'mode=grayscale', 'loop=false', 'unit=micron'))
+        desc.extend(('hyperstack=true', 'mode=composite', 'loop=false', 'unit=micron'))
         if self.deltaz is not None:
             desc.append(f'spacing={self.deltaz}')
         if self.timeinterval is not None:
