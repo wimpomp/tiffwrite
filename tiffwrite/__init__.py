@@ -440,7 +440,11 @@ class IJTiffFile:
         else:
             desc.extend((f'images={np.prod(self.shape)}', f'channels={self.shape[0]}', f'slices={self.shape[1]}',
                          f'frames={self.shape[2]}'))
-        desc.extend(('hyperstack=true', 'mode=composite', 'loop=false', 'unit=micron'))
+        if self.shape[0] == 1:
+            desc.append('mode=grayscale')
+        else:
+            desc.append('mode=composite')
+        desc.extend(('hyperstack=true', 'loop=false', 'unit=micron'))
         if self.deltaz is not None:
             desc.append(f'spacing={self.deltaz}')
         if self.timeinterval is not None:
@@ -449,8 +453,7 @@ class IJTiffFile:
 
     @cached_property
     def empty_frame(self):
-        ifd = self.ifds[list(self.ifds.keys())[-1]].copy()
-        return self.compress_frame(np.zeros((ifd[257].value[0], ifd[256].value[0]), self.dtype))
+        return self.compress_frame(np.zeros(self.frame_shape, self.dtype))
 
     @cached_property
     def frame_shape(self):
