@@ -378,7 +378,7 @@ class IJTiffFile:
 
     def ij_tiff_frame(self, frame):
         with BytesIO() as framedata:
-            with tifffile.TiffWriter(framedata, self.header.bigtiff, self.header.byteorder) as t:
+            with tifffile.TiffWriter(framedata, bigtiff=self.header.bigtiff, byteorder=self.header.byteorder) as t:
                 # predictor=True might save a few bytes, but requires the package imagecodes to save floats
                 t.write(frame, compression=(8, 9), contiguous=True, predictor=False)
             return framedata.getvalue()
