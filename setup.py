@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
 
 setuptools.setup(
     name='tiffwrite',
-    version='2022.5.4',
+    version='2022.6.0',
     author='Wim Pomp @ Lenstra lab NKI',
     author_email='w.pomp@nki.nl',
     description='Parallel tiff writer compatible with ImageJ.',

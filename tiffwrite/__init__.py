@@ -1,3 +1,4 @@
+import os
 import tifffile
 import colorcet
 import struct
@@ -485,46 +486,50 @@ class IJTiffFile:
                                                dtype=int).T.flatten()]) for color in self.colors]
 
     def close(self):
-        assert len(self.frames_added) >= 1, 'at least one frame should be added to the tiff'
         if multiprocessing.current_process().pid == self.main_pid:
             self.pool_manager.close(self)
             with self.fh.lock() as fh:
-                if len(self.frames_written) < np.prod(self.shape):  # add empty frames if needed
-                    for n in product(*[range(i) for i in self.shape]):
-                        if n not in self.frames_written:
-                            self.add_empty_frame(n)
+                if len(self.frames_added) == 0:
+                    warn('At least one frame should be added to the tiff, removing file.')
+                    fh.close()
+                    os.remove(self.path)
+                else:
+                    if len(self.frames_written) < np.prod(self.shape):  # add empty frames if needed
+                        for n in product(*[range(i) for i in self.shape]):
+                            if n not in self.frames_written:
+                                self.add_empty_frame(n)
 
-                for n, tags in self.frame_extra_tags.items():
-                    framenr, channel = self.get_frame_number(n)
-                    self.ifds[framenr].update(tags)
-                if self.colormap is not None:
-                    self.ifds[0][320] = Tag('SHORT', self.colormap_bytes)
-                    self.ifds[0][262] = Tag('SHORT', 3)
-                if self.colors is not None:
-                    for c, color in enumerate(self.colors_bytes):
-                        self.ifds[c][320] = Tag('SHORT', color)
-                        self.ifds[c][262] = Tag('SHORT', 3)
-                if 306 not in self.ifds[0]:
-                    self.ifds[0][306] = Tag('ASCII', datetime.now().strftime('%Y:%m:%d %H:%M:%S'))
-                for framenr in range(self.nframes):
-                    stripbyteoffsets, stripbytecounts = zip(*[self.strips[(framenr, channel)]
-                                                              for channel in range(self.spp)])
-                    self.ifds[framenr][258].value = self.spp * self.ifds[framenr][258].value
-                    self.ifds[framenr][270] = Tag('ASCII', self.description)
-                    self.ifds[framenr][273] = Tag('LONG8', sum(stripbyteoffsets, []))
-                    self.ifds[framenr][277] = Tag('SHORT', self.spp)
-                    self.ifds[framenr][279] = Tag('LONG8', sum(stripbytecounts, []))
-                    self.ifds[framenr][305] = Tag('ASCII', 'tiffwrite_tllab_NKI')
-                    if self.extratags is not None:
-                        self.ifds[framenr].update(self.extratags)
-                    if self.colormap is None and self.colors is None and self.shape[0] > 1:
-                        self.ifds[framenr][284] = Tag('SHORT', 2)
-                    self.ifds[framenr].write(fh, self.header, self.write)
-                    if framenr:
-                        self.ifds[framenr].write_offset(self.ifds[framenr - 1].where_to_write_next_ifd_offset)
-                    else:
-                        self.ifds[framenr].write_offset(self.header.offset - self.header.offsetsize)
-            fh.close()
+                    for n, tags in self.frame_extra_tags.items():
+                        framenr, channel = self.get_frame_number(n)
+                        self.ifds[framenr].update(tags)
+                    if self.colormap is not None:
+                        self.ifds[0][320] = Tag('SHORT', self.colormap_bytes)
+                        self.ifds[0][262] = Tag('SHORT', 3)
+                    if self.colors is not None:
+                        for c, color in enumerate(self.colors_bytes):
+                            self.ifds[c][320] = Tag('SHORT', color)
+                            self.ifds[c][262] = Tag('SHORT', 3)
+                    if 306 not in self.ifds[0]:
+                        self.ifds[0][306] = Tag('ASCII', datetime.now().strftime('%Y:%m:%d %H:%M:%S'))
+                    for framenr in range(self.nframes):
+                        stripbyteoffsets, stripbytecounts = zip(*[self.strips[(framenr, channel)]
+                                                                  for channel in range(self.spp)])
+                        self.ifds[framenr][258].value = self.spp * self.ifds[framenr][258].value
+                        self.ifds[framenr][270] = Tag('ASCII', self.description)
+                        self.ifds[framenr][273] = Tag('LONG8', sum(stripbyteoffsets, []))
+                        self.ifds[framenr][277] = Tag('SHORT', self.spp)
+                        self.ifds[framenr][279] = Tag('LONG8', sum(stripbytecounts, []))
+                        self.ifds[framenr][305] = Tag('ASCII', 'tiffwrite_tllab_NKI')
+                        if self.extratags is not None:
+                            self.ifds[framenr].update(self.extratags)
+                        if self.colormap is None and self.colors is None and self.shape[0] > 1:
+                            self.ifds[framenr][284] = Tag('SHORT', 2)
+                        self.ifds[framenr].write(fh, self.header, self.write)
+                        if framenr:
+                            self.ifds[framenr].write_offset(self.ifds[framenr - 1].where_to_write_next_ifd_offset)
+                        else:
+                            self.ifds[framenr].write_offset(self.header.offset - self.header.offsetsize)
+                    fh.close()
 
     def __enter__(self):
         return self
@@ -598,19 +603,20 @@ class PoolManager:
         self.tifs.pop(tif.path)
         if not self.tifs:
             self.__class__.instance = None
-            self.is_alive = False
-            self.done.set()
-            while not self.queue.empty():
-                self.queue.get()
-            self.queue.close()
-            self.queue.join_thread()
-            while not self.error_queue.empty():
-                print(self.error_queue.get())
-            self.error_queue.close()
-            self.ifd_queue.close()
-            self.ifd_queue.join_thread()
-            self.pool.close()
-            self.pool.join()
+            if self.is_alive:
+                self.is_alive = False
+                self.done.set()
+                while not self.queue.empty():
+                    self.queue.get()
+                self.queue.close()
+                self.queue.join_thread()
+                while not self.error_queue.empty():
+                    print(self.error_queue.get())
+                self.error_queue.close()
+                self.ifd_queue.close()
+                self.ifd_queue.join_thread()
+                self.pool.close()
+                self.pool.join()
 
     def get_ifds_from_queue(self):
         while not self.ifd_queue.empty():
