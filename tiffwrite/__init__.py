@@ -331,7 +331,7 @@ class IJTiffFile:
         wp@tl20200214
     """
     def __init__(self, path, shape, dtype='uint16', colors=None, colormap=None, pxsize=None, deltaz=None,
-                 timeinterval=None, **extratags):
+                 timeinterval=None, compression=(8, 9), comment=None, **extratags):
         assert len(shape) >= 3, 'please specify all c, z, t for the shape'
         assert len(shape) <= 3, 'please specify only c, z, t for the shape'
         assert np.dtype(dtype).char in 'BbHhf', 'datatype not supported'
@@ -345,6 +345,8 @@ class IJTiffFile:
         self.pxsize = pxsize
         self.deltaz = deltaz
         self.timeinterval = timeinterval
+        self.compression = compression
+        self.comment = comment
         self.extratags = {} if extratags is None else Tag.to_tags(extratags)
         if pxsize is not None:
             pxsize = Tag.fraction(pxsize)
@@ -381,7 +383,7 @@ class IJTiffFile:
         with BytesIO() as framedata:
             with tifffile.TiffWriter(framedata, bigtiff=self.header.bigtiff, byteorder=self.header.byteorder) as t:
                 # predictor=True might save a few bytes, but requires the package imagecodes to save floats
-                t.write(frame, compression=(8, 9), contiguous=True, predictor=False)
+                t.write(frame, compression=self.compression, contiguous=True, predictor=False)
             return framedata.getvalue()
 
     def save(self, frame, c, z, t, **extratags):
@@ -450,7 +452,14 @@ class IJTiffFile:
             desc.append(f'spacing={self.deltaz}')
         if self.timeinterval is not None:
             desc.append(f'finterval={self.timeinterval}')
-        return bytes('\n'.join(desc), 'ascii')
+        desc = [bytes(d, 'ascii') for d in desc]
+        if self.comment is not None:
+            desc.append(b'')
+            if isinstance(self.comment, bytes):
+                desc.append(self.comment)
+            else:
+                desc.append(bytes(self.comment, 'ascii'))
+        return b'\n'.join(desc)
 
     @cached_property
     def empty_frame(self):
