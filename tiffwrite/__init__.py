@@ -331,7 +331,7 @@ class IJTiffFile:
         wp@tl20200214
     """
     def __init__(self, path, shape, dtype='uint16', colors=None, colormap=None, pxsize=None, deltaz=None,
-                 timeinterval=None, compression=(8, 9), comment=None, **extratags):
+                 timeinterval=None, compression=(8, 9), comment=None, processes=None, **extratags):
         assert len(shape) >= 3, 'please specify all c, z, t for the shape'
         assert len(shape) <= 3, 'please specify only c, z, t for the shape'
         assert np.dtype(dtype).char in 'BbHhf', 'datatype not supported'
@@ -366,12 +366,15 @@ class IJTiffFile:
         self.frames_added = []
         self.frames_written = []
         self.main_pid = multiprocessing.current_process().pid
-        self.pool_manager = PoolManager(self)
+        self.pool_manager = PoolManager(self, processes)
         with self.fh.lock() as fh:
             self.header.write(fh)
 
     def __hash__(self):
         return hash(self.path)
+
+    def update(self):
+        """ To be overloaded, is called when a frame has been written. """
 
     def get_frame_number(self, n):
         if self.colormap is None and self.colors is None:
@@ -634,6 +637,7 @@ class PoolManager:
             self.tifs[file].ifds[framenr] = ifd
             self.tifs[file].strips[(framenr, channel)] = strip
             self.tifs[file].frames_written.append(n)
+            self.tifs[file].update()
 
     def add_frame(self, *args):
         if not self.is_alive:
@@ -644,7 +648,12 @@ class PoolManager:
     def start_pool(self):
         self.is_alive = True
         nframes = sum([np.prod(tif.shape) for tif in self.tifs.values()])
-        self.processes = self.processes or max(2, min(multiprocessing.cpu_count() // 6, nframes))
+        if self.processes is None:
+            self.processes = max(2, min(multiprocessing.cpu_count() // 6, nframes))
+        elif self.processes == 'all':
+            self.processes = max(2, min(multiprocessing.cpu_count(), nframes))
+        else:
+            self.processes = self.processes
         self.queue = multiprocessing.Queue(10 * self.processes)
         self.ifd_queue = multiprocessing.Queue(10 * self.processes)
         self.error_queue = multiprocessing.Queue()
