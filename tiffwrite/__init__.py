@@ -357,9 +357,9 @@ class IJTiffFile:
         self.spp = self.shape[0] if self.colormap is None and self.colors is None else 1  # samples/pixel
         self.nframes = np.prod(self.shape[1:]) if self.colormap is None and self.colors is None else np.prod(self.shape)
         self.offsets = {}
-        self.fh = FileHandle(path, 'w+b')
-        self.namespace_manager = multiprocessing.Manager()
-        self.hashes = self.namespace_manager.dict()
+        self.fh = FileHandle(path)
+        manager = multiprocessing.Manager()
+        self.hashes = manager.dict()
         self.strips = {}
         self.ifds = {}
         self.frame_extra_tags = {}
@@ -503,7 +503,6 @@ class IJTiffFile:
             with self.fh.lock() as fh:
                 if len(self.frames_added) == 0:
                     warn('At least one frame should be added to the tiff, removing file.')
-                    fh.close()
                     os.remove(self.path)
                 else:
                     if len(self.frames_written) < np.prod(self.shape):  # add empty frames if needed
@@ -541,7 +540,6 @@ class IJTiffFile:
                             self.ifds[framenr].write_offset(self.ifds[framenr - 1].where_to_write_next_ifd_offset)
                         else:
                             self.ifds[framenr].write_offset(self.header.offset - self.header.offsetsize)
-                    fh.close()
 
     def __enter__(self):
         return self
@@ -677,27 +675,28 @@ class PoolManager:
 
 class FileHandle:
     """ Process safe file handle """
-    def __init__(self, name, mode='rb'):
+    def __init__(self, name):
+        if os.path.exists(name):
+            os.remove(name)
+        with open(name, 'xb'):
+            pass
         self.name = name
-        self.mode = mode
-        self._lock = multiprocessing.RLock()
-        self._fh = open(name, mode, 0)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args, **kwargs):
-        self.close()
-
-    def close(self):
-        self._fh.close()
+        manager = multiprocessing.Manager()
+        self._lock = manager.RLock()
+        self._pos = manager.Value('i', 0)
 
     @contextmanager
     def lock(self):
         self._lock.acquire()
+        f = None
         try:
-            yield self._fh
+            f = open(self.name, 'rb+')
+            f.seek(self._pos.value)
+            yield f
         finally:
+            if f is not None:
+                self._pos.value = f.tell()
+                f.close()
             self._lock.release()
 
 
