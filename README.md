@@ -1,3 +1,5 @@
+[![pytest](https://github.com/wimpomp/tiffwrite/actions/workflows/pytest.yml/badge.svg)](https://github.com/wimpomp/tiffwrite/actions/workflows/pytest.yml)
+
 # Tiffwrite
 Exploiting [tifffile](https://pypi.org/project/tifffile/) in parallel to write BioFormats/ImageJ compatible tiffs with
 good compression.
