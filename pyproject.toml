@@ -20,9 +20,10 @@ numpy = "*"
 tqdm = "*"
 colorcet = "*"
 matplotlib = "*"
+pytest = { version = "*", optional = true }
 
-[tool.poetry.group.test.dependencies]
-pytest = "*"
+[tool.poetry.extras]
+test = ["pytest"]
 
 [build-system]
 requires = ["poetry-core"]
