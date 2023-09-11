@@ -1,6 +1,7 @@
+from itertools import product
+
 import numpy as np
 from tiffwrite import IJTiffFile
-from itertools import product
 
 
 def test_single(tmp_path):

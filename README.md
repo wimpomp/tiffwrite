@@ -11,7 +11,7 @@ good compression.
 - Compresses even more by referencing tag or image data which otherwise would have been saved several times.
 For example empty frames, or a long string tag on every frame.
 - Enables memory efficient scripts by saving frames whenever they're ready to be saved, not waiting for the whole stack.
-- Colormaps, extra tags globally or frame dependent.
+- Colormaps, extra tags, globally or frame dependent.
 
 ## Installation
     pip install tiffwrite
@@ -92,6 +92,3 @@ or
 be opened as a correctly ordered hyperstack.
 - Using the colormap parameter you can make ImageJ open the file and apply the colormap. colormap='glasbey' is very
 useful.
-- IJTiffFile does not allow more than one pool of parallel processes to be open at a time. Therefore, when writing
-multiple tiff's simultaneously you have to open all before you start saving any frame, in this way all files share the
-same pool.
