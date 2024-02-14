@@ -1,5 +1,6 @@
 import os
 import struct
+import warnings
 from collections.abc import Iterable
 from contextlib import contextmanager
 from datetime import datetime
@@ -23,7 +24,7 @@ __all__ = ["IJTiffFile", "Tag", "tiffwrite"]
 
 try:
     __version__ = version("tiffwrite")
-except Exception:
+except Exception:  # noqa
     __version__ = "unknown"
 
 
@@ -48,9 +49,9 @@ def tiffwrite(file, data, axes='TZCXY', dtype=None, bar=False, *args, **kwargs):
     shape = data.shape[:3]
     with IJTiffFile(file, shape, data.dtype if dtype is None else dtype, *args, **kwargs) as f:
         at_least_one = False
-        for n in tqdm(product(*[range(i) for i in shape]), total=np.prod(shape), desc='Saving tiff', disable=not bar):
-            if np.any(data[n]) or not at_least_one:
-                f.save(data[n], *n)
+        for n in tqdm(product(*[range(i) for i in shape]), total=np.prod(shape), desc='Saving tiff', disable=not bar):  # noqa
+            if np.any(data[n]) or not at_least_one:   # noqa
+                f.save(data[n], *n)  # noqa
                 at_least_one = True
 
 
@@ -116,6 +117,9 @@ class Tag:
                                                              (denominator is not None and denominator < 0) else 32) - 1)
 
     def __init__(self, ttype, value=None, offset=None):
+        self.fh = None
+        self.header = None
+        self.bytes_data = None
         if value is None:
             self.value = ttype
             if all([isinstance(value, int) for value in self.value]):
@@ -182,7 +186,7 @@ class Tag:
             return self.value, len(self.value) // struct.calcsize(self.dtype)
         elif self.ttype in (2, 14):
             if isinstance(self.value, str):
-                bytes_value = self.value.encode('ascii') + b'\x00'
+                bytes_value = self.value.encode('ascii') + b'\x00'  # noqa
             else:
                 bytes_value = b'\x00'.join([value.encode('ascii') for value in self.value]) + b'\x00'
             return bytes_value, len(bytes_value)
@@ -240,6 +244,10 @@ class Tag:
 class IFD(dict):
     def __init__(self, fh=None):
         super().__init__()
+        self.fh = fh
+        self.header = None
+        self.offset = None
+        self.where_to_write_next_ifd_offset = None
         if fh is not None:
             header = Header(fh)
             fh.seek(header.offset)
@@ -280,7 +288,7 @@ class IFD(dict):
                     value = [struct.unpack(header.byteorder + dtype, fh.read(dtypelen))[0] for _ in range(count)]
 
                 if toolong:
-                    fh.seek(cp)
+                    fh.seek(cp)  # noqa
 
                 self[code] = Tag(ttype, value, pos)
             fh.seek(header.offset)
@@ -338,7 +346,7 @@ class IJTiffFile:
         wp@tl20200214
     """
     def __init__(self, path, shape, dtype='uint16', colors=None, colormap=None, pxsize=None, deltaz=None,
-                 timeinterval=None, compression=(8, 9), comment=None, **extratags):
+                 timeinterval=None, compression=(50000, 22), comment=None, **extratags):
         assert len(shape) >= 3, 'please specify all c, z, t for the shape'
         assert len(shape) <= 3, 'please specify only c, z, t for the shape'
         assert np.dtype(dtype).char in 'BbHhf', 'datatype not supported'
@@ -418,7 +426,7 @@ class IJTiffFile:
         if self.deltaz is not None:
             desc.append(f'spacing={self.deltaz}')
         if self.timeinterval is not None:
-            desc.append(f'finterval={self.timeinterval}')
+            desc.append(f'interval={self.timeinterval}')
         desc = [bytes(d, 'ascii') for d in desc]
         if self.comment is not None:
             desc.append(b'')
@@ -465,26 +473,33 @@ class IJTiffFile:
                     for c, color in enumerate(self.colors_bytes):
                         ifds[c][320] = Tag('SHORT', color)
                         ifds[c][262] = Tag('SHORT', 3)
-                if 306 not in ifds[0]:
+                if 0 in ifds and 306 not in ifds[0]:
                     ifds[0][306] = Tag('ASCII', datetime.now().strftime('%Y:%m:%d %H:%M:%S'))
+                wrn = False
                 for framenr in range(self.nframes):
-                    stripbyteoffsets, stripbytecounts = zip(*[strips[(framenr, channel)]
-                                                              for channel in range(self.spp)])
-                    ifds[framenr][258].value = self.spp * ifds[framenr][258].value
-                    ifds[framenr][270] = Tag('ASCII', self.description)
-                    ifds[framenr][273] = Tag('LONG8', sum(stripbyteoffsets, []))
-                    ifds[framenr][277] = Tag('SHORT', self.spp)
-                    ifds[framenr][279] = Tag('LONG8', sum(stripbytecounts, []))
-                    ifds[framenr][305] = Tag('ASCII', 'tiffwrite_tllab_NKI')
-                    if self.extratags is not None:
-                        ifds[framenr].update(self.extratags)
-                    if self.colormap is None and self.colors is None and self.shape[0] > 1:
-                        ifds[framenr][284] = Tag('SHORT', 2)
-                    ifds[framenr].write(fh, self.header, self.write)
-                    if framenr:
-                        ifds[framenr].write_offset(ifds[framenr - 1].where_to_write_next_ifd_offset)
+                    if framenr in ifds and all([(framenr, channel) in strips for channel in range(self.spp)]):
+                        stripbyteoffsets, stripbytecounts = zip(*[strips[(framenr, channel)]
+                                                                  for channel in range(self.spp)])
+                        ifds[framenr][258].value = self.spp * ifds[framenr][258].value
+                        ifds[framenr][270] = Tag('ASCII', self.description)
+                        ifds[framenr][273] = Tag('LONG8', sum(stripbyteoffsets, []))
+                        ifds[framenr][277] = Tag('SHORT', self.spp)
+                        ifds[framenr][279] = Tag('LONG8', sum(stripbytecounts, []))
+                        ifds[framenr][305] = Tag('ASCII', 'tiffwrite_tllab_NKI')
+                        if self.extratags is not None:
+                            ifds[framenr].update(self.extratags)
+                        if self.colormap is None and self.colors is None and self.shape[0] > 1:
+                            ifds[framenr][284] = Tag('SHORT', 2)
+                        ifds[framenr].write(fh, self.header, self.write)
+                        if framenr:
+                            ifds[framenr].write_offset(ifds[framenr - 1].where_to_write_next_ifd_offset)
+                        else:
+                            ifds[framenr].write_offset(self.header.offset - self.header.offsetsize)
                     else:
-                        ifds[framenr].write_offset(self.header.offset - self.header.offsetsize)
+                        wrn = True
+                if wrn:
+                    warnings.warn('Some frames were not added to the tif file, either you forgot them, '
+                                  'or an error occured and the tif file was closed prematurely.')
 
     def __enter__(self):
         return self
@@ -548,14 +563,10 @@ class FileHandle:
 
     @contextmanager
     def lock(self):
-        self._lock.acquire()
-        f = None
-        try:
-            f = open(self.name, 'rb+')
-            f.seek(self._pos.value)
-            yield f
-        finally:
-            if f is not None:
-                self._pos.value = f.tell()
-                f.close()
-            self._lock.release()
+        with self._lock:
+            with open(self.name, 'rb+') as f:
+                try:
+                    f.seek(self._pos.value)
+                    yield f
+                finally:
+                    self._pos.value = f.tell()
