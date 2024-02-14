@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tiffwrite"
-version = "2024.2.0"
+version = "2024.2.1"
 description = "Parallel tiff writer compatible with ImageJ."
 authors = ["Wim Pomp, Lenstra lab NKI <w.pomp@nki.nl>"]
 license = "GPL-3.0-or-later"
@@ -11,6 +11,7 @@ repository = "https://github.com/wimpomp/tiffwrite"
 [tool.poetry.dependencies]
 python = "^3.8"
 tifffile = "*"
+imagecodecs = "*"
 numpy = "*"
 tqdm = "*"
 colorcet = "*"
