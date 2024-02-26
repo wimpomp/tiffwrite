@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tiffwrite"
-version = "2024.2.1"
+version = "2024.2.2"
 description = "Parallel tiff writer compatible with ImageJ."
 authors = ["Wim Pomp, Lenstra lab NKI <w.pomp@nki.nl>"]
 license = "GPL-3.0-or-later"

@@ -406,7 +406,7 @@ class IJTiffFile:
         assert (c, z, t) not in self.pool.tasks, f'frame {c} {z} {t} is added already'
         assert all([0 <= i < s for i, s in zip((c, z, t), self.shape)]), \
             'frame {} {} {} is outside shape {} {} {}'.format(c, z, t, *self.shape)
-        self.pool(frame.astype(self.dtype) if isinstance(frame, np.ndarray) else frame, handle=(c, z, t))
+        self.pool(frame.astype(self.dtype) if hasattr(frame, 'astype') else frame, handle=(c, z, t))
         if extratags:
             self.frame_extra_tags[(c, z, t)] = Tag.to_tags(extratags)
 
