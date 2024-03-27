@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tiffwrite"
-version = "2024.2.2"
+version = "2024.3.0"
 description = "Parallel tiff writer compatible with ImageJ."
 authors = ["Wim Pomp, Lenstra lab NKI <w.pomp@nki.nl>"]
 license = "GPL-3.0-or-later"
@@ -9,21 +9,29 @@ packages = [{include = "tiffwrite"}]
 repository = "https://github.com/wimpomp/tiffwrite"
 
 [tool.poetry.dependencies]
-python = "^3.8"
+python = "^3.10"
 tifffile = "*"
 imagecodecs = "*"
 numpy = "*"
 tqdm = "*"
 colorcet = "*"
 matplotlib = "*"
-parfor = ">=2023.10.1"
+parfor = ">=2024.3.0"
 pytest = { version = "*", optional = true }
 
 [tool.poetry.extras]
-test = ["pytest"]
+test = ["pytest", "mypy"]
 
 [tool.pytest.ini_options]
 filterwarnings = ["ignore:::(?!tiffwrite)"]
+
+[tool.isort]
+line_length = 119
+
+[tool.mypy]
+disable_error_code = ["import-untyped", "return"]
+implicit_optional = true
+exclude = ["build"]
 
 [build-system]
 requires = ["poetry-core"]

@@ -1,12 +1,14 @@
 from contextlib import ExitStack
 from itertools import product
+from pathlib import Path
 
 import numpy as np
-from tiffwrite import IJTiffFile
 from tqdm.auto import tqdm
 
+from tiffwrite import IJTiffFile
 
-def test_mult(tmp_path):
+
+def test_mult(tmp_path: Path) -> None:
     shape = (2, 3, 5)
     paths = [tmp_path / f'test{i}.tif' for i in range(6)]
     with ExitStack() as stack:

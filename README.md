@@ -1,3 +1,4 @@
+[![mypy](https://github.com/wimpomp/tiffwrite/actions/workflows/mypy.yml/badge.svg)](https://github.com/wimpomp/tiffwrite/actions/workflows/mypy.yml)
 [![pytest](https://github.com/wimpomp/tiffwrite/actions/workflows/pytest.yml/badge.svg)](https://github.com/wimpomp/tiffwrite/actions/workflows/pytest.yml)
 
 # Tiffwrite

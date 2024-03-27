@@ -1,10 +1,12 @@
 from itertools import product
+from pathlib import Path
 
 import numpy as np
+
 from tiffwrite import IJTiffFile
 
 
-def test_single(tmp_path):
+def test_single(tmp_path: Path) -> None:
     path = tmp_path / 'test.tif'
     with IJTiffFile(path, (3, 4, 5)) as tif:
         for c, z, t in product(range(3), range(4), range(5)):
