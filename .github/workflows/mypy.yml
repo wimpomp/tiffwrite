@@ -18,4 +18,4 @@ jobs:
       - name: Install dependencies
         run: pip install mypy lxml geojson maturin python-dateutil types-python-dateutil lxml-stubs
       - name: Test with mypy
-        run: mypy
+        run: mypy .
