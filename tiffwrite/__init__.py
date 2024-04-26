@@ -452,7 +452,7 @@ class IJTiffFile:
                 desc_bytes.append(self.comment)
             else:
                 desc_bytes.append(bytes(self.comment, 'ascii'))
-        return b'\n'.join(desc_bytes)
+        return b'\n'.join(desc_bytes) + b'\0'
 
     @cached_property
     def colormap_bytes(self) -> Optional[bytes]:
@@ -485,13 +485,14 @@ class IJTiffFile:
                 for n, tags in self.frame_extra_tags.items():
                     framenr, channel = self.get_frame_number(n)
                     ifds[framenr].update(tags)
-                if self.colormap is not None:
+                if 0 in ifds and self.colormap is not None:
                     ifds[0][320] = Tag('SHORT', self.colormap_bytes)
                     ifds[0][262] = Tag('SHORT', 3)
                 if self.colors is not None:
                     for c, color in enumerate(self.colors_bytes):
-                        ifds[c][320] = Tag('SHORT', color)
-                        ifds[c][262] = Tag('SHORT', 3)
+                        if c in ifds:
+                            ifds[c][320] = Tag('SHORT', color)
+                            ifds[c][262] = Tag('SHORT', 3)
                 if 0 in ifds and 306 not in ifds[0]:
                     ifds[0][306] = Tag('ASCII', datetime.now().strftime('%Y:%m:%d %H:%M:%S'))
                 wrn = False
@@ -518,7 +519,7 @@ class IJTiffFile:
                         wrn = True
                 if wrn:
                     warnings.warn('Some frames were not added to the tif file, either you forgot them, '
-                                  'or an error occured and the tif file was closed prematurely.')
+                                  'or an error occurred and the tif file was closed prematurely.')
 
     def __enter__(self) -> IJTiffFile:
         return self
