@@ -31,6 +31,11 @@ except Exception:  # noqa
     __version__ = "unknown"
 
 
+type Strip = tuple[list[int], list[int]]
+type CZT = tuple[int, int, int]
+type FrameInfo = tuple[IFD, Strip, CZT]
+
+
 def tiffwrite(file: str | Path, data: np.ndarray, axes: str = 'TZCXY', dtype: DTypeLike = None, bar: bool = False,
               *args: Any, **kwargs: Any) -> None:
     """ file:       string; filename of the new tiff file
@@ -389,8 +394,8 @@ class IJTiffFile:
         self.nframes = np.prod(self.shape[1:]) if self.colormap is None and self.colors is None else np.prod(self.shape)
         self.frame_extra_tags: dict[tuple[int, int, int], dict[int, Tag]] = {}
         self.fh = FileHandle(self.path)
+        self.pool = ParPool(self.compress_frame)  # type: ignore
         self.hashes = PoolSingleton().manager.dict()
-        self.pool = ParPool(self.compress_frame)
         self.main_process = True
 
         with self.fh.lock() as fh:  # noqa
@@ -477,13 +482,14 @@ class IJTiffFile:
         if self.main_process:
             ifds, strips = {}, {}
             for n in list(self.pool.tasks):
-                framenr, channel = self.get_frame_number(n)
-                ifds[framenr], strips[(framenr, channel)] = self.pool[n]
+                for ifd, strip, delta in self.pool[n]:
+                    framenr, channel = self.get_frame_number(tuple(i + j for i, j in zip(n, delta)))  # type: ignore
+                    ifds[framenr], strips[(framenr, channel)] = ifd, strip
 
             self.pool.close()
             with self.fh.lock() as fh:  # noqa
                 for n, tags in self.frame_extra_tags.items():
-                    framenr, channel = self.get_frame_number(n)
+                    framenr, _ = self.get_frame_number(n)
                     ifds[framenr].update(tags)
                 if 0 in ifds and self.colormap is not None:
                     ifds[0][320] = Tag('SHORT', self.colormap_bytes)
@@ -547,14 +553,17 @@ class IJTiffFile:
             fh.write(bvalue)
             return offset
 
-    def compress_frame(self, frame: np.ndarray) -> tuple[IFD, tuple[list[int], list[int]]]:
-        """ This is run in a different process"""
+    def compress_frame(self, frame: np.ndarray) -> Sequence[FrameInfo]:
+        """ This is run in a different process. Turns an image into bytes, writes them and returns the ifd, strip info
+             and czt delta. When subclassing IJTiffWrite this can be overridden to write one or more (using czt delta)
+             frames.
+        """
         stripbytecounts, ifd, chunks = self.get_chunks(self.ij_tiff_frame(frame))
         stripbyteoffsets = []
         with self.fh.lock() as fh:  # noqa
             for chunk in chunks:
                 stripbyteoffsets.append(self.write(fh, chunk))
-        return ifd, (stripbyteoffsets, stripbytecounts)
+        return (ifd, (stripbyteoffsets, stripbytecounts), (0, 0, 0)),
 
     @staticmethod
     def get_chunks(frame: bytes) -> tuple[list[int], IFD, list[bytes]]:

@@ -64,7 +64,6 @@ or
     tiffwrite('file.tif', image, 'TCXY')
 
 ## Write one frame at a time
-    from itertools import product
     from tiffwrite import IJTiffFile
     import numpy as np
 
@@ -76,7 +75,6 @@ or
                     tif.save(np.random.randint(0, 10, (32, 32)), c, z, t)
 
 ## Saving multiple tiffs simultaneously
-    from itertools import product
     from tiffwrite import IJTiffFile
     import numpy as np
     
@@ -89,7 +87,7 @@ or
                     tif_b.save(np.random.randint(0, 10, (32, 32)), c, z, t)
 
 ## Tricks & tips
-- The order of feeding frames to IJTiffFile is unimportant, IJTiffFile will order de ifd's such that the file will
+- The order of feeding frames to IJTiffFile is unimportant, IJTiffFile will order the ifd's such that the file will
 be opened as a correctly ordered hyperstack.
 - Using the colormap parameter you can make ImageJ open the file and apply the colormap. colormap='glasbey' is very
 useful.
