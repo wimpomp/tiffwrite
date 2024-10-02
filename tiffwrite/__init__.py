@@ -31,9 +31,8 @@ except Exception:  # noqa
     __version__ = "unknown"
 
 
-type Strip = tuple[list[int], list[int]]
-type CZT = tuple[int, int, int]
-type FrameInfo = tuple[IFD, Strip, CZT]
+Strip = tuple[list[int], list[int]]
+CZT = tuple[int, int, int]
 
 
 def tiffwrite(file: str | Path, data: np.ndarray, axes: str = 'TZCXY', dtype: DTypeLike = None, bar: bool = False,
@@ -348,6 +347,9 @@ class IFD(dict):
         new = self.__class__()
         new.update({key: tag.copy() for key, tag in self.items()})
         return new
+
+
+FrameInfo = tuple[IFD, Strip, CZT]
 
 
 class IJTiffFile:
