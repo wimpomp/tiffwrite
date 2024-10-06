@@ -4,3 +4,4 @@
 /tiffwrite.egg-info/
 /.pytest_cache/
 /venv/
+/target/

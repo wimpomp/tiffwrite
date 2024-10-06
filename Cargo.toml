@@ -1,0 +1,21 @@
+[package]
+name = "tiffwrite"
+version = "2024.10.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "tiffwrite"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22.3", features = ["extension-module", "abi3-py310", "generate-import-lib", "anyhow"] }
+anyhow = "1.0.89"
+rayon = "1.10.0"
+fraction = "0.15.3"
+num = "0.4.3"
+ndarray = "0.16.1"
+chrono = "0.4.38"
+
+[features]
+nopython = []
