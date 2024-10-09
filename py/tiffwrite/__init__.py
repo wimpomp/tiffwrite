@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-import numpy as np
-from typing import Any, Self, Sequence
+from itertools import product
 from pathlib import Path
+from typing import Any, Sequence
+
+import numpy as np
 from numpy.typing import ArrayLike, DTypeLike
+from tqdm.auto import tqdm
 
-from . import tiffwrite as rs
+from . import tiffwrite_rs as rs  # noqa
 
 
-__all__ = ['Tag', 'IJTiffFile', 'tiffwrite']
+__all__ = ['Header', 'IJTiffFile', 'IFD', 'FrameInfo', 'Tag', 'Strip', 'tiffwrite']
 
+
+class Header:
+    pass
 
 class IFD(dict):
     pass
@@ -19,11 +25,16 @@ class Tag(rs.Tag):
     pass
 
 
+Strip = tuple[list[int], list[int]]
+CZT = tuple[int, int, int]
+FrameInfo = tuple[IFD, Strip, CZT]
+
+
 class IJTiffFile(rs.IJTiffFile):
     def __new__(cls, path: str | Path, shape: tuple[int, int, int], dtype: DTypeLike = 'uint16',
                 colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,
                 deltaz: float = None, timeinterval: float = None, comment: str = None,
-                **extratags:  Tag.Value | Tag) -> None:
+                **extratags:  Tag.Value | Tag) -> IJTiffFile:
         new = super().__new__(cls, str(path), shape)
         if colors is not None:
             new = new.with_colors(colors)
@@ -41,14 +52,14 @@ class IJTiffFile(rs.IJTiffFile):
             new = new.extend_extratags(extratags)
         return new
 
-    def __init__(self, path: str | Path, shape: tuple[int, int, int], dtype: DTypeLike = 'uint16',
-                 colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,
-                 deltaz: float = None, timeinterval: float = None, comment: str = None,
-                 **extratags:  Tag.Value | Tag) -> None:
+    def __init__(self, path: str | Path, shape: tuple[int, int, int], dtype: DTypeLike = 'uint16',  # noqa
+                 colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,  # noqa
+                 deltaz: float = None, timeinterval: float = None, comment: str = None,  # noqa
+                 **extratags:  Tag.Value | Tag) -> None:  # noqa
         self.path = Path(path)
         self.dtype = np.dtype(dtype)
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> IJTiffFile:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -81,7 +92,7 @@ class IJTiffFile(rs.IJTiffFile):
                 raise TypeError(f'Cannot save type {self.dtype}')
 
 
-def tiffwrite(file: str | Path, data: ArrayLike, axes: str = 'TZCXY', dtype: DTypeLike = None, bar: bool = False,
+def tiffwrite(file: str | Path, data: np.ndarray, axes: str = 'TZCXY', dtype: DTypeLike = None, bar: bool = False,
               *args: Any, **kwargs: Any) -> None:
     """ file:       string; filename of the new tiff file
         data:       2 to 5D numpy array
@@ -90,3 +101,21 @@ def tiffwrite(file: str | Path, data: ArrayLike, axes: str = 'TZCXY', dtype: DTy
         bar:        bool; whether to show a progress bar
         other args: see IJTiffFile
     """
+
+    axes = axes[-np.ndim(data):].upper()
+    if not axes == 'CZTXY':
+        axes_shuffle = [axes.find(i) for i in 'CZTXY']
+        axes_add = [i for i, j in enumerate(axes_shuffle) if j < 0]
+        axes_shuffle = [i for i in axes_shuffle if i >= 0]
+        data = np.transpose(data, axes_shuffle)
+        for axis in axes_add:
+            data = np.expand_dims(data, axis)
+
+    shape = data.shape[:3]
+    with IJTiffFile(file, shape, data.dtype if dtype is None else dtype, *args, **kwargs) as f:  # type: ignore
+        at_least_one = False
+        for n in tqdm(product(*[range(i) for i in shape]), total=np.prod(shape),  # type: ignore
+                      desc='Saving tiff', disable=not bar):
+            if np.any(data[n]) or not at_least_one:
+                f.save(data[n], *n)
+                at_least_one = True

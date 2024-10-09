@@ -6,19 +6,19 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use anyhow::Result;
-use fraction::Fraction;
-use num::{Complex, Zero};
-use num::complex::ComplexFloat;
+use num::{Complex, Rational32, Zero};
 use ndarray::{s, Array2};
 use num::traits::ToBytes;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use chrono::Utc;
+use zstd::stream::encode_all;
+use rayon::prelude::*;
 
 
 const TAG_SIZE: usize = 20;
 const OFFSET_SIZE: usize = 8;
 const OFFSET: u64 = 16;
-const COMPRESSION: u16  = 1;
+const COMPRESSION: u16 = 50000;
 
 
 #[derive(Clone, Debug)]
@@ -116,10 +116,10 @@ impl Tag {
         Tag::new(code, long.into_iter().map(|x| x.to_le_bytes()).flatten().collect(), 4)
     }
 
-    pub fn rational(code: u16, rational: Vec<Fraction>) -> Self {
+    pub fn rational(code: u16, rational: Vec<Rational32>) -> Self {
         Tag::new(code, rational.into_iter().map(|x|
-            u32::try_from(*x.denom().unwrap()).unwrap().to_le_bytes().into_iter().chain(
-                u32::try_from(*x.numer().unwrap()).unwrap().to_le_bytes()).collect::<Vec<_>>()
+            u32::try_from(*x.denom()).unwrap().to_le_bytes().into_iter().chain(
+                u32::try_from(*x.numer()).unwrap().to_le_bytes()).collect::<Vec<_>>()
         ).flatten().collect(), 5)
     }
 
@@ -135,10 +135,10 @@ impl Tag {
         Tag::new(code, slong.into_iter().map(|x| x.to_le_bytes()).flatten().collect(), 9)
     }
 
-    pub fn srational(code: u16, srational: Vec<Fraction>) -> Self {
+    pub fn srational(code: u16, srational: Vec<Rational32>) -> Self {
         Tag::new(code, srational.into_iter().map(|x|
-            i32::try_from(*x.denom().unwrap()).unwrap().to_le_bytes().into_iter().chain(
-                i32::try_from(*x.numer().unwrap()).unwrap().to_le_bytes()).collect::<Vec<_>>()
+            i32::try_from(*x.denom()).unwrap().to_le_bytes().into_iter().chain(
+                i32::try_from(*x.numer()).unwrap().to_le_bytes()).collect::<Vec<_>>()
         ).flatten().collect(), 10)
     }
 
@@ -162,7 +162,7 @@ impl Tag {
 
     pub fn complex(code: u16, complex: Vec<Complex<f32>>) -> Self {
         Tag::new(code, complex.into_iter().map(|x|
-            x.re().to_le_bytes().into_iter().chain(x.im().to_le_bytes()).collect::<Vec<_>>()
+            x.re.to_le_bytes().into_iter().chain(x.im.to_le_bytes()).collect::<Vec<_>>()
         ).flatten().collect(), 15)
     }
 
@@ -237,7 +237,7 @@ impl Tag {
 
 #[derive(Clone, Debug)]
 struct Frame {
-    tilebyteoffsets: Vec<u64>,
+    tileoffsets: Vec<u64>,
     tilebytecounts: Vec<u64>,
     image_width: u32,
     image_length: u32,
@@ -250,11 +250,11 @@ struct Frame {
 
 impl Frame {
     fn new(
-        tilebyteoffsets: Vec<u64>, tilebytecounts: Vec<u64>, image_width: u32, image_length: u32,
+        tileoffsets: Vec<u64>, tilebytecounts: Vec<u64>, image_width: u32, image_length: u32,
         bits_per_sample: u16, sample_format: u16, tile_width: u16, tile_length: u16
     ) -> Self {
         Frame {
-            tilebyteoffsets, tilebytecounts, image_width, image_length, bits_per_sample,
+            tileoffsets, tilebytecounts, image_width, image_length, bits_per_sample,
             sample_format, tile_width, tile_length, extra_tags: Vec::new()
         }
     }
@@ -276,8 +276,7 @@ macro_rules! bytes_impl {
             const SAMPLE_FORMAT: u16 = $sample_format;
 
             #[inline]
-            fn bytes(&self) -> Vec<u8>
-            {
+            fn bytes(&self) -> Vec<u8> {
                 self.to_le_bytes().to_vec()
             }
         }
@@ -293,7 +292,6 @@ bytes_impl!(u128, 128, 1);
 bytes_impl!(usize, 64, 1);
 #[cfg(target_pointer_width = "32")]
 bytes_impl!(usize, 32, 1);
-
 bytes_impl!(i8, 8, 2);
 bytes_impl!(i16, 16, 2);
 bytes_impl!(i32, 32, 2);
@@ -422,30 +420,38 @@ impl IJTiffFile {
 
     pub fn save<T: Bytes + Clone + Zero>(&mut self, frame: Array2<T>, c: usize, z: usize, t: usize,
                 extra_tags: Option<Vec<Tag>>) -> Result<()> {
-        self.compress_frame(frame, c, z, t, extra_tags);
+        self.compress_frame(frame.reversed_axes(), c, z, t, extra_tags)?;
         Ok(())
     }
 
-    fn compress_frame<T: Bytes + Clone + Zero>(&mut self, frame: Array2<T>, c: usize, z: usize, t: usize,
-                                                     extra_tags: Option<Vec<Tag>>) {
+    fn compress_frame<T: Bytes + Clone + Zero>(&mut self, frame: Array2<T>,
+                                               c: usize, z: usize, t: usize,
+                                               extra_tags: Option<Vec<Tag>>) -> Result<()> {
         let image_width = frame.shape()[0] as u32;
         let image_length = frame.shape()[1] as u32;
-        let mut tilebyteoffsets = Vec::new();
+        let tile_size = 2usize.pow(((image_width as f64 * image_length as f64 / 64f64).log2() / 2f64).round() as u32).max(16).min(1024);
+        let mut tileoffsets = Vec::new();
         let mut tilebytecounts = Vec::new();
-        let tiles = IJTiffFile::tile(frame.reversed_axes(), 64);
-        for tile in tiles {
-            let bytes: Vec<u8> = tile.map(|x| x.bytes()).into_iter().flatten().collect();
-            tilebytecounts.push(bytes.len() as u64);
-            tilebyteoffsets.push(self.write(&bytes).unwrap());
+        let tiles = IJTiffFile::tile(frame.reversed_axes(), tile_size);
+        let byte_tiles: Vec<Vec<u8>> = tiles.into_iter().map(
+            |tile| tile.map(|x| x.bytes()).into_iter().flatten().collect()
+        ).collect();
+        for tile in byte_tiles.into_par_iter().map(|x| encode_all(&*x, 3)).collect::<Vec<_>>() {
+            if let Ok(bytes) = tile {
+                tilebytecounts.push(bytes.len() as u64);
+                tileoffsets.push(self.write(&bytes)?);
+            }
         }
-        let mut frame = Frame::new(tilebyteoffsets, tilebytecounts, image_width, image_length,
-                               T::BITS_PER_SAMPLE, T::SAMPLE_FORMAT, 64, 64);
+
+        let mut frame = Frame::new(tileoffsets, tilebytecounts, image_width, image_length,
+                                   T::BITS_PER_SAMPLE, T::SAMPLE_FORMAT, tile_size as u16, tile_size as u16);
         if let Some(tags) = extra_tags {
             for tag in tags {
                 frame.extra_tags.push(tag);
             }
         }
         self.frames.insert(self.get_frame_number(c, z, t), frame);
+        Ok(())
     }
 
     fn tile<T: Clone + Zero>(frame: Array2<T>, size: usize) -> Vec<Array2<T>> {
@@ -484,11 +490,11 @@ impl IJTiffFile {
         tiles
     }
 
-    fn get_colormap(&self, colormap: &Vec<u16>) -> Result<Vec<u16>> {
+    fn get_colormap(&self, _colormap: &Vec<u16>) -> Result<Vec<u16>> {
         todo!();
     }
 
-    fn get_color(&self, colors: (u8, u8, u8)) -> Result<Vec<u16>> {
+    fn get_color(&self, _colors: (u8, u8, u8)) -> Result<Vec<u16>> {
         todo!();
     }
 
@@ -497,12 +503,12 @@ impl IJTiffFile {
         let mut warn = false;
         for frame_number in 0..self.n_frames {
             if let Some(frame) = self.frames.get(&(frame_number, 0)) {
-                let mut tilebyteoffsets = Vec::new();
+                let mut tileoffsets = Vec::new();
                 let mut tilebytecounts = Vec::new();
                 let mut frame_count = 0;
                 for channel in 0..self.samples_per_pixel {
                     if let Some(frame_n) = self.frames.get(&(frame_number, channel)) {
-                        tilebyteoffsets.extend(frame_n.tilebyteoffsets.iter());
+                        tileoffsets.extend(frame_n.tileoffsets.iter());
                         tilebytecounts.extend(frame_n.tilebytecounts.iter());
                         frame_count += 1;
                     } else {
@@ -519,7 +525,7 @@ impl IJTiffFile {
                 ifd.push_tag(Tag::ascii(305, "tiffwrite_rs"));
                 ifd.push_tag(Tag::short(322, vec![frame.tile_width]));
                 ifd.push_tag(Tag::short(323, vec![frame.tile_length]));
-                ifd.push_tag(Tag::long8(324, tilebyteoffsets));
+                ifd.push_tag(Tag::long8(324, tileoffsets));
                 ifd.push_tag(Tag::long8(325, tilebytecounts));
                 ifd.push_tag(Tag::short(339, vec![frame.sample_format]));
                 if frame_number == 0 {

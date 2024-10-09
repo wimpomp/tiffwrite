@@ -13,9 +13,13 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 
+[project.optional-dependencies]
+test = ["pytest"]
+
 [tool.maturin]
+python-source = "py"
 features = ["pyo3/extension-module"]
-module-name = "tiffwrite"
+module-name = "tiffwrite.tiffwrite_rs"
 
 [tool.isort]
 line_length = 119

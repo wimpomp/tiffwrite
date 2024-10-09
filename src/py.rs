@@ -1,7 +1,6 @@
 use pyo3::prelude::*;
 use crate::{IJTiffFile, Tag};
-use fraction::Fraction;
-use num::Complex;
+use num::{Complex, Rational32, FromPrimitive};
 use numpy::{PyReadonlyArray2, PyArrayMethods};
 
 
@@ -36,7 +35,7 @@ impl PyTag {
 
     #[staticmethod]
     fn rational(code: u16, rational: Vec<f64>) -> Self {
-        PyTag { tag: Tag::rational(code, rational.into_iter().map(|x| Fraction::from(x)).collect()) }
+        PyTag { tag: Tag::rational(code, rational.into_iter().map(|x| Rational32::from_f64(x).unwrap()).collect()) }
     }
 
     #[staticmethod]
@@ -56,7 +55,7 @@ impl PyTag {
 
     #[staticmethod]
     fn srational(code: u16, srational: Vec<f64>) -> Self {
-        PyTag { tag: Tag::srational(code, srational.into_iter().map(|x| Fraction::from(x)).collect()) }
+        PyTag { tag: Tag::srational(code, srational.into_iter().map(|x| Rational32::from_f64(x).unwrap()).collect()) }
     }
 
     #[staticmethod]
@@ -97,6 +96,10 @@ impl PyTag {
     #[staticmethod]
     fn ifd8(code: u16, ifd8: Vec<u64>) -> Self {
         PyTag { tag: Tag::ifd8(code, ifd8) }
+    }
+
+    fn count(&self) -> u64 {
+        self.tag.count()
     }
 }
 
@@ -197,8 +200,10 @@ impl_save!(i64, save_i64);
 impl_save!(f32, save_f32);
 impl_save!(f64, save_f64);
 
+
 #[pymodule]
-fn tiffwrite(m: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pyo3(name = "tiffwrite_rs")]
+fn tiffwrite_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTag>()?;
     m.add_class::<PyIJTiffFile>()?;
     Ok(())
