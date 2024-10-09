@@ -144,21 +144,13 @@ impl PyIJTiffFile {
 
     fn append_extra_tag(&mut self, tag: PyTag) {
         if let Some(ijtifffile) = self.ijtifffile.as_mut() {
-            if let Some(extra_tags) = ijtifffile.extra_tags.as_mut() {
-                extra_tags.push(tag.tag);
-            } else {
-                ijtifffile.extra_tags = Some(vec![tag.tag]);
-            }
+            ijtifffile.extra_tags.push(tag.tag);
         }
     }
 
     fn extend_extra_tags(&mut self, tags: Vec<PyTag>) {
         if let Some(ijtifffile) = self.ijtifffile.as_mut() {
-            if let Some(extra_tags) = ijtifffile.extra_tags.as_mut() {
-                extra_tags.extend(tags.into_iter().map(|x| x.tag));
-            } else {
-                ijtifffile.extra_tags = Some(tags.into_iter().map(|x| x.tag).collect());
-            }
+            ijtifffile.extra_tags.extend(tags.into_iter().map(|x| x.tag));
         }
     }
 
