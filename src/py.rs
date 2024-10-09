@@ -1,9 +1,8 @@
 use pyo3::prelude::*;
-use crate::lib::{IJTiffFile, Tag};
-use std::time::Duration;
-use pyo3::types::{PyInt, PyString};
+use crate::{IJTiffFile, Tag};
 use fraction::Fraction;
 use num::Complex;
+use numpy::{PyReadonlyArray2, PyArrayMethods};
 
 
 #[pyclass(subclass)]
@@ -106,14 +105,14 @@ impl PyTag {
 #[pyo3(name = "IJTiffFile")]
 #[derive(Debug)]
 struct PyIJTiffFile {
-    ijtifffile: IJTiffFile
+    ijtifffile: Option<IJTiffFile>
 }
 
 #[pymethods]
 impl PyIJTiffFile {
     #[new]
-    fn new(path: &str, shape: (usize, usize, usize), dtype: &str) -> PyResult<Self> {
-        Ok(PyIJTiffFile { ijtifffile: IJTiffFile::new(path, shape)? } )
+    fn new(path: &str, shape: (usize, usize, usize)) -> PyResult<Self> {
+        Ok(PyIJTiffFile { ijtifffile: Some(IJTiffFile::new(path, shape)?) } )
     }
 
     fn with_colors(&mut self, colors: (u8, u8, u8)) -> Self {
@@ -140,19 +139,67 @@ impl PyIJTiffFile {
         todo!()
     }
 
-    fn append_extra_tag(&mut self, extra_tag: PyTag) {
-        if let Some(extra_tags) = self.ijtifffile.extra_tags.as_mut() {
-            extra_tags.push(extra_tag.tag);
-        } else {
-            self.ijtifffile.extra_tags = Some(vec![extra_tag.tag]);
+    fn append_extra_tag(&mut self, tag: PyTag) {
+        if let Some(ijtifffile) = self.ijtifffile.as_mut() {
+            if let Some(extra_tags) = ijtifffile.extra_tags.as_mut() {
+                extra_tags.push(tag.tag);
+            } else {
+                ijtifffile.extra_tags = Some(vec![tag.tag]);
+            }
         }
     }
 
+    fn extend_extra_tags(&mut self, tags: Vec<PyTag>) {
+        if let Some(ijtifffile) = self.ijtifffile.as_mut() {
+            if let Some(extra_tags) = ijtifffile.extra_tags.as_mut() {
+                extra_tags.extend(tags.into_iter().map(|x| x.tag));
+            } else {
+                ijtifffile.extra_tags = Some(tags.into_iter().map(|x| x.tag).collect());
+            }
+        }
+    }
 
+    fn close(&mut self) -> PyResult<()> {
+        self.ijtifffile.take();
+        Ok(())
+    }
 }
+
+
+macro_rules! impl_save {
+    ($T:ty, $t:ident) => {
+        #[pymethods]
+        impl PyIJTiffFile {
+            fn $t(&mut self, frame: PyReadonlyArray2<$T>, c: usize, t: usize, z: usize,
+                extra_tags: Option<Vec<PyTag>>) -> PyResult<()> {
+                let extra_tags = if let Some(extra_tags) = extra_tags {
+                    Some(extra_tags.into_iter().map(|x| x.tag).collect())
+                } else {
+                    None
+                };
+                if let Some(ijtifffile) = self.ijtifffile.as_mut() {
+                    ijtifffile.save(frame.to_owned_array(), c, t, z, extra_tags)?;
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
+impl_save!(u8, save_u8);
+impl_save!(u16, save_u16);
+impl_save!(u32, save_u32);
+impl_save!(u64, save_u64);
+impl_save!(i8, save_i8);
+impl_save!(i16, save_i16);
+impl_save!(i32, save_i32);
+impl_save!(i64, save_i64);
+impl_save!(f32, save_f32);
+impl_save!(f64, save_f64);
 
 #[pymodule]
 fn tiffwrite(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyTag>()?;
     m.add_class::<PyIJTiffFile>()?;
     Ok(())
 }

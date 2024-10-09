@@ -1,3 +1,6 @@
+#[cfg(not(feature = "nopython"))]
+mod py;
+
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -15,6 +18,7 @@ use chrono::Utc;
 const TAG_SIZE: usize = 20;
 const OFFSET_SIZE: usize = 8;
 const OFFSET: u64 = 16;
+const COMPRESSION: u16  = 1;
 
 
 #[derive(Clone, Debug)]
@@ -238,7 +242,7 @@ struct Frame {
     image_width: u32,
     image_length: u32,
     bits_per_sample: u16,
-    compression: u16,
+    sample_format: u16,
     tile_width: u16,
     tile_length: u16,
     extra_tags: Vec<Tag>
@@ -246,15 +250,61 @@ struct Frame {
 
 impl Frame {
     fn new(
-        tilebyteoffsets: Vec<u64>, tilebytecounts: Vec<u64>, image_width: u32,
-        image_length: u32, bits_per_sample: u16, compression: u16, tile_width: u16, tile_length: u16
+        tilebyteoffsets: Vec<u64>, tilebytecounts: Vec<u64>, image_width: u32, image_length: u32,
+        bits_per_sample: u16, sample_format: u16, tile_width: u16, tile_length: u16
     ) -> Self {
         Frame {
             tilebyteoffsets, tilebytecounts, image_width, image_length, bits_per_sample,
-            compression, tile_width, tile_length, extra_tags: Vec::new()
+            sample_format, tile_width, tile_length, extra_tags: Vec::new()
         }
     }
 }
+
+
+pub trait Bytes {
+    const BITS_PER_SAMPLE: u16;
+    const SAMPLE_FORMAT: u16;
+
+    fn bytes(&self) -> Vec<u8>;
+}
+
+
+macro_rules! bytes_impl {
+    ($T:ty, $bits_per_sample:expr, $sample_format:expr) => {
+        impl Bytes for $T {
+            const BITS_PER_SAMPLE: u16 = $bits_per_sample;
+            const SAMPLE_FORMAT: u16 = $sample_format;
+
+            #[inline]
+            fn bytes(&self) -> Vec<u8>
+            {
+                self.to_le_bytes().to_vec()
+            }
+        }
+    };
+}
+
+bytes_impl!(u8, 8, 1);
+bytes_impl!(u16, 16, 1);
+bytes_impl!(u32, 32, 1);
+bytes_impl!(u64, 64, 1);
+bytes_impl!(u128, 128, 1);
+#[cfg(target_pointer_width = "64")]
+bytes_impl!(usize, 64, 1);
+#[cfg(target_pointer_width = "32")]
+bytes_impl!(usize, 32, 1);
+
+bytes_impl!(i8, 8, 2);
+bytes_impl!(i16, 16, 2);
+bytes_impl!(i32, 32, 2);
+bytes_impl!(i64, 64, 2);
+bytes_impl!(i128, 128, 2);
+#[cfg(target_pointer_width = "64")]
+bytes_impl!(isize, 64, 2);
+#[cfg(target_pointer_width = "32")]
+bytes_impl!(isize, 32, 2);
+bytes_impl!(f32, 32, 3);
+bytes_impl!(f64, 64, 3);
 
 
 #[derive(Debug)]
@@ -331,19 +381,6 @@ impl IJTiffFile {
         desc
     }
 
-    pub fn save(&mut self, frame: Array2<u16>, c: usize, z: usize, t: usize,
-                extra_tags: Option<Vec<Tag>>) -> Result<()> {
-        let mut compressed_frame = self.compress_frame(frame)?;
-        if let Some(tags) = extra_tags {
-            for tag in tags {
-                compressed_frame.extra_tags.push(tag);
-            }
-        }
-
-        self.frames.insert(self.get_frame_number(c, z, t), compressed_frame);
-        Ok(())
-    }
-
     fn get_frame_number(&self, c: usize, z: usize, t: usize) -> (usize, u8) {
         if let (None, None) = (self.colormap.as_ref(), self.colors.as_ref()) {
             (z + t * self.shape.1, c as u8)
@@ -352,7 +389,7 @@ impl IJTiffFile {
         }
     }
 
-    pub fn hash<T: Hash>(value: &T) -> u64 {
+    fn hash<T: Hash>(value: &T) -> u64 {
         let mut hasher = DefaultHasher::new();
         value.hash(&mut hasher);
         hasher.finish()
@@ -383,21 +420,32 @@ impl IJTiffFile {
         }
     }
 
-    fn compress_frame(&mut self, frame: Array2<u16>) -> Result<Frame> {
+    pub fn save<T: Bytes + Clone + Zero>(&mut self, frame: Array2<T>, c: usize, z: usize, t: usize,
+                extra_tags: Option<Vec<Tag>>) -> Result<()> {
+        self.compress_frame(frame, c, z, t, extra_tags);
+        Ok(())
+    }
+
+    fn compress_frame<T: Bytes + Clone + Zero>(&mut self, frame: Array2<T>, c: usize, z: usize, t: usize,
+                                                     extra_tags: Option<Vec<Tag>>) {
         let image_width = frame.shape()[0] as u32;
         let image_length = frame.shape()[1] as u32;
         let mut tilebyteoffsets = Vec::new();
         let mut tilebytecounts = Vec::new();
         let tiles = IJTiffFile::tile(frame.reversed_axes(), 64);
         for tile in tiles {
-            let bytes: Vec<u8> = tile.into_flat().into_iter().map(
-                |x| x.to_le_bytes()).into_iter().flatten().collect();
+            let bytes: Vec<u8> = tile.map(|x| x.bytes()).into_iter().flatten().collect();
             tilebytecounts.push(bytes.len() as u64);
-            tilebyteoffsets.push(self.write(&bytes)?);
+            tilebyteoffsets.push(self.write(&bytes).unwrap());
         }
-
-        Ok(Frame::new(tilebyteoffsets, tilebytecounts, image_width, image_length,
-                      16, 1, 64, 64))
+        let mut frame = Frame::new(tilebyteoffsets, tilebytecounts, image_width, image_length,
+                               T::BITS_PER_SAMPLE, T::SAMPLE_FORMAT, 64, 64);
+        if let Some(tags) = extra_tags {
+            for tag in tags {
+                frame.extra_tags.push(tag);
+            }
+        }
+        self.frames.insert(self.get_frame_number(c, z, t), frame);
     }
 
     fn tile<T: Clone + Zero>(frame: Array2<T>, size: usize) -> Vec<Array2<T>> {
@@ -438,15 +486,13 @@ impl IJTiffFile {
 
     fn get_colormap(&self, colormap: &Vec<u16>) -> Result<Vec<u16>> {
         todo!();
-        Ok(Vec::new())
     }
 
     fn get_color(&self, colors: (u8, u8, u8)) -> Result<Vec<u16>> {
         todo!();
-        Ok(Vec::new())
     }
 
-    pub fn close(&mut self) -> Result<()> {
+    fn close(&mut self) -> Result<()> {
         let mut where_to_write_next_ifd_offset = OFFSET - OFFSET_SIZE as u64;
         let mut warn = false;
         for frame_number in 0..self.n_frames {
@@ -467,7 +513,7 @@ impl IJTiffFile {
                 ifd.push_tag(Tag::long(256, vec![frame.image_width]));
                 ifd.push_tag(Tag::long(257, vec![frame.image_length]));
                 ifd.push_tag(Tag::short(258, vec![frame.bits_per_sample; frame_count]));
-                ifd.push_tag(Tag::short(259, vec![1]));
+                ifd.push_tag(Tag::short(259, vec![COMPRESSION]));
                 ifd.push_tag(Tag::ascii(270, &self.description()));
                 ifd.push_tag(Tag::short(277, vec![frame_count as u16]));
                 ifd.push_tag(Tag::ascii(305, "tiffwrite_rs"));
@@ -475,6 +521,7 @@ impl IJTiffFile {
                 ifd.push_tag(Tag::short(323, vec![frame.tile_length]));
                 ifd.push_tag(Tag::long8(324, tilebyteoffsets));
                 ifd.push_tag(Tag::long8(325, tilebytecounts));
+                ifd.push_tag(Tag::short(339, vec![frame.sample_format]));
                 if frame_number == 0 {
                     if let Some(colormap) = &self.colormap {
                         ifd.push_tag(Tag::short(320, self.get_colormap(colormap)?));
