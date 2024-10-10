@@ -1,101 +1,153 @@
+use crate::{Colors, IJTiffFile, Tag};
+use ndarray::s;
+use num::{Complex, FromPrimitive, Rational32};
+use numpy::{PyArrayMethods, PyReadonlyArray2};
 use pyo3::prelude::*;
-use crate::{IJTiffFile, Tag};
-use num::{Complex, Rational32, FromPrimitive};
-use numpy::{PyReadonlyArray2, PyArrayMethods};
-
 
 #[pyclass(subclass)]
 #[pyo3(name = "Tag")]
 #[derive(Clone, Debug)]
 struct PyTag {
-    tag: Tag
+    tag: Tag,
 }
 
 #[pymethods]
 impl PyTag {
     #[staticmethod]
     fn byte(code: u16, byte: Vec<u8>) -> Self {
-        PyTag { tag: Tag::byte(code, byte) }
+        PyTag {
+            tag: Tag::byte(code, &byte),
+        }
     }
 
     #[staticmethod]
     fn ascii(code: u16, ascii: &str) -> Self {
-        PyTag { tag: Tag::ascii(code, ascii) }
+        PyTag {
+            tag: Tag::ascii(code, ascii),
+        }
     }
 
     #[staticmethod]
     fn short(code: u16, short: Vec<u16>) -> Self {
-        PyTag { tag: Tag::short(code, short) }
+        PyTag {
+            tag: Tag::short(code, &short),
+        }
     }
 
     #[staticmethod]
     fn long(code: u16, long: Vec<u32>) -> Self {
-        PyTag { tag: Tag::long(code, long) }
+        PyTag {
+            tag: Tag::long(code, &long),
+        }
     }
 
     #[staticmethod]
     fn rational(code: u16, rational: Vec<f64>) -> Self {
-        PyTag { tag: Tag::rational(code, rational.into_iter().map(|x| Rational32::from_f64(x).unwrap()).collect()) }
+        PyTag {
+            tag: Tag::rational(
+                code,
+                &rational
+                    .into_iter()
+                    .map(|x| Rational32::from_f64(x).unwrap())
+                    .collect(),
+            ),
+        }
     }
 
     #[staticmethod]
     fn sbyte(code: u16, sbyte: Vec<i8>) -> Self {
-        PyTag { tag: Tag::sbyte(code, sbyte) }
+        PyTag {
+            tag: Tag::sbyte(code, &sbyte),
+        }
     }
 
     #[staticmethod]
     fn sshort(code: u16, sshort: Vec<i16>) -> Self {
-        PyTag { tag: Tag::sshort(code, sshort) }
+        PyTag {
+            tag: Tag::sshort(code, &sshort),
+        }
     }
 
     #[staticmethod]
     fn slong(code: u16, slong: Vec<i32>) -> Self {
-        PyTag { tag: Tag::slong(code, slong) }
+        PyTag {
+            tag: Tag::slong(code, &slong),
+        }
     }
 
     #[staticmethod]
     fn srational(code: u16, srational: Vec<f64>) -> Self {
-        PyTag { tag: Tag::srational(code, srational.into_iter().map(|x| Rational32::from_f64(x).unwrap()).collect()) }
+        PyTag {
+            tag: Tag::srational(
+                code,
+                &srational
+                    .into_iter()
+                    .map(|x| Rational32::from_f64(x).unwrap())
+                    .collect(),
+            ),
+        }
     }
 
     #[staticmethod]
     fn float(code: u16, float: Vec<f32>) -> Self {
-        PyTag { tag: Tag::float(code, float) }
+        PyTag {
+            tag: Tag::float(code, &float),
+        }
     }
 
     #[staticmethod]
     fn double(code: u16, double: Vec<f64>) -> Self {
-        PyTag { tag: Tag::double(code, double) }
+        PyTag {
+            tag: Tag::double(code, &double),
+        }
     }
 
     #[staticmethod]
     fn ifd(code: u16, ifd: Vec<u32>) -> Self {
-        PyTag { tag: Tag::ifd(code, ifd) }
+        PyTag {
+            tag: Tag::ifd(code, &ifd),
+        }
     }
 
     #[staticmethod]
     fn unicode(code: u16, unicode: &str) -> Self {
-        PyTag { tag: Tag::unicode(code, unicode) }
+        PyTag {
+            tag: Tag::unicode(code, unicode),
+        }
     }
 
     #[staticmethod]
     fn complex(code: u16, complex: Vec<(f32, f32)>) -> Self {
-        PyTag { tag: Tag::complex(code, complex.into_iter().map(|(x, y)| Complex { re: x, im: y }).collect()) }
+        PyTag {
+            tag: Tag::complex(
+                code,
+                &complex
+                    .into_iter()
+                    .map(|(x, y)| Complex { re: x, im: y })
+                    .collect(),
+            ),
+        }
     }
 
     #[staticmethod]
     fn long8(code: u16, long8: Vec<u64>) -> Self {
-        PyTag { tag: Tag::long8(code, long8) }
+        PyTag {
+            tag: Tag::long8(code, &long8),
+        }
     }
 
     #[staticmethod]
     fn slong8(code: u16, slong8: Vec<i64>) -> Self {
-        PyTag { tag: Tag::slong8(code, slong8) }
+        PyTag {
+            tag: Tag::slong8(code, &slong8),
+        }
     }
 
     #[staticmethod]
     fn ifd8(code: u16, ifd8: Vec<u64>) -> Self {
-        PyTag { tag: Tag::ifd8(code, ifd8) }
+        PyTag {
+            tag: Tag::ifd8(code, &ifd8),
+        }
     }
 
     fn count(&self) -> u64 {
@@ -103,55 +155,157 @@ impl PyTag {
     }
 }
 
-
 #[pyclass(subclass)]
 #[pyo3(name = "IJTiffFile")]
 #[derive(Debug)]
 struct PyIJTiffFile {
-    ijtifffile: Option<IJTiffFile>
+    ijtifffile: Option<IJTiffFile>,
 }
 
 #[pymethods]
 impl PyIJTiffFile {
     #[new]
     fn new(path: &str, shape: (usize, usize, usize)) -> PyResult<Self> {
-        Ok(PyIJTiffFile { ijtifffile: Some(IJTiffFile::new(path, shape)?) } )
+        Ok(PyIJTiffFile {
+            ijtifffile: Some(IJTiffFile::new(path, shape)?),
+        })
     }
 
-    fn with_colors(&mut self, colors: (u8, u8, u8)) -> Self {
-        todo!()
+    #[getter]
+    fn get_colors(&self) -> PyResult<Option<Vec<Vec<u8>>>> {
+        if let Some(ijtifffile) = &self.ijtifffile {
+            if let Colors::Colors(colors) = &ijtifffile.colors {
+                return Ok(Some(colors.to_owned()));
+            }
+        }
+        Ok(None)
     }
 
-    fn with_colormap(&mut self, colormap: Vec<(u8, u8, u8)>) -> Self {
-        todo!()
+    #[setter]
+    fn set_colors(&mut self, colors: PyReadonlyArray2<u8>) -> PyResult<()> {
+        if let Some(ijtifffile) = &mut self.ijtifffile {
+            let a = colors.to_owned_array();
+            ijtifffile.colors = Colors::Colors(
+                (0..a.shape()[0])
+                    .map(|i| Vec::from(a.slice(s![i, ..]).as_slice().unwrap()))
+                    .collect(),
+            );
+        }
+        Ok(())
     }
 
-    fn with_px_size(&mut self, pxsize: f64) -> Self {
-        todo!()
+    #[getter]
+    fn get_colormap(&mut self) -> PyResult<Option<Vec<Vec<u8>>>> {
+        if let Some(ijtifffile) = &self.ijtifffile {
+            if let Colors::Colormap(colormap) = &ijtifffile.colors {
+                return Ok(Some(colormap.to_owned()));
+            }
+        }
+        Ok(None)
     }
 
-    fn with_delta_z(&mut self, delta_z: f64) -> Self {
-        todo!()
+    #[setter]
+    fn set_colormap(&mut self, colormap: PyReadonlyArray2<u8>) -> PyResult<()> {
+        if let Some(ijtifffile) = &mut self.ijtifffile {
+            let a = colormap.to_owned_array();
+            ijtifffile.colors = Colors::Colormap(
+                (0..a.shape()[0])
+                    .map(|i| Vec::from(a.slice(s![i, ..]).as_slice().unwrap()))
+                    .collect(),
+            );
+        }
+        Ok(())
     }
 
-    fn with_time_interval(&mut self, time_interval: f64) -> Self {
-        todo!()
-    }
-
-    fn with_comments(&mut self, comments: String) -> Self {
-        todo!()
-    }
-
-    fn append_extra_tag(&mut self, tag: PyTag) {
-        if let Some(ijtifffile) = self.ijtifffile.as_mut() {
-            ijtifffile.extra_tags.push(tag.tag);
+    #[getter]
+    fn get_px_size(&self) -> PyResult<Option<f64>> {
+        if let Some(ijtifffile) = &self.ijtifffile {
+            Ok(ijtifffile.px_size)
+        } else {
+            Ok(None)
         }
     }
 
-    fn extend_extra_tags(&mut self, tags: Vec<PyTag>) {
-        if let Some(ijtifffile) = self.ijtifffile.as_mut() {
-            ijtifffile.extra_tags.extend(tags.into_iter().map(|x| x.tag));
+    #[setter]
+    fn set_px_size(&mut self, px_size: f64) -> PyResult<()> {
+        if let Some(ijtifffile) = &mut self.ijtifffile {
+            ijtifffile.px_size = Some(px_size);
         }
+        Ok(())
+    }
+
+    #[getter]
+    fn get_delta_z(&self) -> PyResult<Option<f64>> {
+        if let Some(ijtifffile) = &self.ijtifffile {
+            Ok(ijtifffile.delta_z)
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[setter]
+    fn set_delta_z(&mut self, delta_z: f64) -> PyResult<()> {
+        if let Some(ijtifffile) = &mut self.ijtifffile {
+            ijtifffile.delta_z = Some(delta_z);
+        }
+        Ok(())
+    }
+
+    #[getter]
+    fn get_time_interval(&self) -> PyResult<Option<f64>> {
+        if let Some(ijtifffile) = &self.ijtifffile {
+            Ok(ijtifffile.time_interval)
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[setter]
+    fn set_time_interval(&mut self, time_interval: f64) -> PyResult<()> {
+        if let Some(ijtifffile) = &mut self.ijtifffile {
+            ijtifffile.time_interval = Some(time_interval);
+        }
+        Ok(())
+    }
+
+    #[getter]
+    fn get_comment(&self) -> PyResult<Option<String>> {
+        if let Some(ijtifffile) = &self.ijtifffile {
+            Ok(ijtifffile.comment.clone())
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[setter]
+    fn set_comment(&mut self, comment: &str) -> PyResult<()> {
+        if let Some(ijtifffile) = &mut self.ijtifffile {
+            ijtifffile.comment = Some(String::from(comment));
+        }
+        Ok(())
+    }
+
+    fn append_extra_tag(&mut self, tag: PyTag, czt: Option<(usize, usize, usize)>) {
+        if let Some(ijtifffile) = self.ijtifffile.as_mut() {
+            if let Some(extra_tags) = ijtifffile.extra_tags.get_mut(&czt) {
+                extra_tags.push(tag.tag)
+            }
+        }
+    }
+
+    fn get_tags(&self, czt: Option<(usize, usize, usize)>) -> PyResult<Vec<PyTag>> {
+        if let Some(ijtifffile) = &self.ijtifffile {
+            if let Some(extra_tags) = ijtifffile.extra_tags.get(&czt) {
+                let v = extra_tags
+                    .iter()
+                    .map(|tag| PyTag {
+                        tag: tag.to_owned(),
+                    })
+                    .collect();
+                return Ok(v);
+            }
+        }
+        Ok(Vec::new())
     }
 
     fn close(&mut self) -> PyResult<()> {
@@ -160,20 +314,19 @@ impl PyIJTiffFile {
     }
 }
 
-
 macro_rules! impl_save {
     ($T:ty, $t:ident) => {
         #[pymethods]
         impl PyIJTiffFile {
-            fn $t(&mut self, frame: PyReadonlyArray2<$T>, c: usize, t: usize, z: usize,
-                extra_tags: Option<Vec<PyTag>>) -> PyResult<()> {
-                let extra_tags = if let Some(extra_tags) = extra_tags {
-                    Some(extra_tags.into_iter().map(|x| x.tag).collect())
-                } else {
-                    None
-                };
+            fn $t(
+                &mut self,
+                frame: PyReadonlyArray2<$T>,
+                c: usize,
+                t: usize,
+                z: usize,
+            ) -> PyResult<()> {
                 if let Some(ijtifffile) = self.ijtifffile.as_mut() {
-                    ijtifffile.save(frame.to_owned_array(), c, t, z, extra_tags)?;
+                    ijtifffile.save(frame.to_owned_array(), c, t, z)?;
                 }
                 Ok(())
             }
@@ -191,7 +344,6 @@ impl_save!(i32, save_i32);
 impl_save!(i64, save_i64);
 impl_save!(f32, save_f32);
 impl_save!(f64, save_f64);
-
 
 #[pymodule]
 #[pyo3(name = "tiffwrite_rs")]

@@ -4,7 +4,9 @@ from itertools import product
 from pathlib import Path
 from typing import Any, Sequence
 
+import colorcet
 import numpy as np
+from matplotlib import colors as mpl_colors
 from numpy.typing import ArrayLike, DTypeLike
 from tqdm.auto import tqdm
 
@@ -27,29 +29,29 @@ class Tag(rs.Tag):
 
 Strip = tuple[list[int], list[int]]
 CZT = tuple[int, int, int]
-FrameInfo = tuple[IFD, Strip, CZT]
+FrameInfo = tuple[np.ndarray, None, CZT]
 
 
 class IJTiffFile(rs.IJTiffFile):
     def __new__(cls, path: str | Path, shape: tuple[int, int, int], dtype: DTypeLike = 'uint16',
                 colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,
                 deltaz: float = None, timeinterval: float = None, comment: str = None,
-                **extratags:  Tag.Value | Tag) -> IJTiffFile:
+                **extratags: Tag) -> IJTiffFile:
         new = super().__new__(cls, str(path), shape)
         if colors is not None:
-            new = new.with_colors(colors)
+            new.colors = np.array([get_color(color) for color in colors])
         if colormap is not None:
-            new = new.with_colormap(colormap)
+            new.colormap = get_colormap(colormap)
         if pxsize is not None:
-            new = new.with_pxsize(pxsize)
+            new.px_size = float(pxsize)
         if deltaz is not None:
-            new = new.with_deltaz(deltaz)
+            new.delta_z = float(deltaz)
         if timeinterval is not None:
-            new = new.with_timeinterval(timeinterval)
+            new.time_interval = float(timeinterval)
         if comment is not None:
-            new = new.with_comment(comment)
-        if extratags:
-            new = new.extend_extratags(extratags)
+            new.comment = comment
+        for extra_tag in extratags:
+            new.append_extra_tag(extra_tag, None)
         return new
 
     def __init__(self, path: str | Path, shape: tuple[int, int, int], dtype: DTypeLike = 'uint16',  # noqa
@@ -66,30 +68,43 @@ class IJTiffFile(rs.IJTiffFile):
         self.close()
 
     def save(self, frame: ArrayLike, c: int, z: int, t: int) -> None:
-        frame = np.asarray(frame).astype(self.dtype)
-        match self.dtype:
-            case np.uint8:
-                self.save_u8(frame, c, z, t)
-            case np.uint16:
-                self.save_u16(frame, c, z, t)
-            case np.uint32:
-                self.save_u32(frame, c, z, t)
-            case np.uint64:
-                self.save_u64(frame, c, z, t)
-            case np.int8:
-                self.save_i8(frame, c, z, t)
-            case np.int16:
-                self.save_i16(frame, c, z, t)
-            case np.int32:
-                self.save_i32(frame, c, z, t)
-            case np.int64:
-                self.save_i64(frame, c, z, t)
-            case np.float32:
-                self.save_f32(frame, c, z, t)
-            case np.float64:
-                self.save_f64(frame, c, z, t)
-            case _:
-                raise TypeError(f'Cannot save type {self.dtype}')
+        for frame, _, (cn, zn, tn) in self.compress_frame(frame):
+            frame = np.asarray(frame).astype(self.dtype)
+            match self.dtype:
+                case np.uint8:
+                    self.save_u8(frame, c + cn, z + zn, t + tn)
+                case np.uint16:
+                    self.save_u16(frame, c + cn, z + zn, t + tn)
+                case np.uint32:
+                    self.save_u32(frame, c + cn, z + zn, t + tn)
+                case np.uint64:
+                    self.save_u64(frame, c + cn, z + zn, t + tn)
+                case np.int8:
+                    self.save_i8(frame, c + cn, z + zn, t + tn)
+                case np.int16:
+                    self.save_i16(frame, c + cn, z + zn, t + tn)
+                case np.int32:
+                    self.save_i32(frame, c + cn, z + zn, t + tn)
+                case np.int64:
+                    self.save_i64(frame, c + cn, z + zn, t + tn)
+                case np.float32:
+                    self.save_f32(frame, c + cn, z + zn, t + tn)
+                case np.float64:
+                    self.save_f64(frame, c + cn, z + zn, t + tn)
+                case _:
+                    raise TypeError(f'Cannot save type {self.dtype}')
+
+    def compress_frame(self, frame: ArrayLike) -> tuple[FrameInfo]:  # noqa
+        return (frame, None, (0, 0, 0)),
+
+def get_colormap(colormap: str) -> np.ndarray:
+    colormap = getattr(colorcet, colormap)
+    colormap[0] = '#ffffff'
+    colormap[-1] = '#000000'
+    return np.array([[int(''.join(i), 16) for i in zip(*[iter(s[1:])] * 2)] for s in colormap]).astype('uint8')
+
+def get_color(color: str) -> np.ndarray:
+    return np.array([int(''.join(i), 16) for i in zip(*[iter(mpl_colors.to_hex(color)[1:])] * 2)]).astype('uint8')
 
 
 def tiffwrite(file: str | Path, data: np.ndarray, axes: str = 'TZCXY', dtype: DTypeLike = None, bar: bool = False,
