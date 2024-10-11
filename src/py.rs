@@ -165,10 +165,16 @@ struct PyIJTiffFile {
 #[pymethods]
 impl PyIJTiffFile {
     #[new]
-    fn new(path: &str, shape: (usize, usize, usize)) -> PyResult<Self> {
+    fn new(path: &str) -> PyResult<Self> {
         Ok(PyIJTiffFile {
-            ijtifffile: Some(IJTiffFile::new(path, shape)?),
+            ijtifffile: Some(IJTiffFile::new(path)?),
         })
+    }
+
+    fn set_compression_level(&mut self, compression_level: i32) {
+        if let Some(ref mut ijtifffile) = self.ijtifffile {
+            ijtifffile.set_compression_level(compression_level);
+        }
     }
 
     #[getter]

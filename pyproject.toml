@@ -15,7 +15,7 @@ classifiers = [
 dependencies = ["colorcet", "matplotlib", "numpy", "tqdm"]
 
 [project.optional-dependencies]
-test = ["pytest"]
+test = ["pytest", "tifffile"]
 
 [tool.maturin]
 python-source = "py"

@@ -33,11 +33,15 @@ FrameInfo = tuple[np.ndarray, None, CZT]
 
 
 class IJTiffFile(rs.IJTiffFile):
-    def __new__(cls, path: str | Path, shape: tuple[int, int, int], dtype: DTypeLike = 'uint16',
+    def __new__(cls, path: str | Path, shape: tuple[int, int, int] = None, dtype: DTypeLike = 'uint16',
                 colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,
-                deltaz: float = None, timeinterval: float = None, comment: str = None,
+                deltaz: float = None, timeinterval: float = None, compression: int = None, comment: str = None,
                 **extratags: Tag) -> IJTiffFile:
-        new = super().__new__(cls, str(path), shape)
+        new = super().__new__(cls, str(path))
+        if compression is not None:
+            if isinstance(compression, Sequence):
+                compression = compression[-1]
+            new.set_compression_level(compression)
         if colors is not None:
             new.colors = np.array([get_color(color) for color in colors])
         if colormap is not None:
@@ -54,7 +58,7 @@ class IJTiffFile(rs.IJTiffFile):
             new.append_extra_tag(extra_tag, None)
         return new
 
-    def __init__(self, path: str | Path, shape: tuple[int, int, int], dtype: DTypeLike = 'uint16',  # noqa
+    def __init__(self, path: str | Path, shape: tuple[int, int, int] = None, dtype: DTypeLike = 'uint16',  # noqa
                  colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,  # noqa
                  deltaz: float = None, timeinterval: float = None, comment: str = None,  # noqa
                  **extratags:  Tag.Value | Tag) -> None:  # noqa

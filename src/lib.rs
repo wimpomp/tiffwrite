@@ -1,25 +1,42 @@
-// #[cfg(not(feature = "nopython"))]
+#[cfg(not(feature = "nopython"))]
 mod py;
 
 use anyhow::Result;
 use chrono::Utc;
 use ndarray::{s, Array2};
-use num::traits::ToBytes;
-use num::{Complex, FromPrimitive, Rational32, Zero};
+use num::{traits::ToBytes, Complex, FromPrimitive, Rational32, Zero};
 use rayon::prelude::*;
-use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::{cmp::Ordering, collections::HashMap};
 use std::fs::{File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::thread;
-use std::thread::JoinHandle;
-use zstd::stream::encode_all;
+use std::io::{copy, Read, Seek, SeekFrom, Write};
+use std::{thread, thread::JoinHandle};
+use zstd::{DEFAULT_COMPRESSION_LEVEL, stream::Encoder};
 
 const TAG_SIZE: usize = 20;
 const OFFSET_SIZE: usize = 8;
 const OFFSET: u64 = 16;
 const COMPRESSION: u16 = 50000;
+
+pub fn encode_all(source: Vec<u8>, level: i32) -> Result<Vec<u8>> {
+    let mut result = Vec::<u8>::new();
+    copy_encode(&*source, &mut result, level, source.len() as u64)?;
+    Ok(result)
+}
+
+/// copy_encode from zstd crate, but let it include the content size in the zstd block header
+pub fn copy_encode<R, W>(mut source: R, destination: W, level: i32, length: u64) -> Result<()>
+where
+    R: Read,
+    W: Write,
+{
+    let mut encoder = Encoder::new(destination, level)?;
+    encoder.include_contentsize(true)?;
+    encoder.set_pledged_src_size(Some(length))?;
+    copy(&mut source, &mut encoder)?;
+    encoder.finish()?;
+    Ok(())
+}
 
 #[derive(Clone, Debug)]
 struct IFD {
@@ -366,8 +383,8 @@ struct CompressedFrame {
 
 #[derive(Clone, Debug)]
 struct Frame {
-    tileoffsets: Vec<u64>,
-    tilebytecounts: Vec<u64>,
+    offsets: Vec<u64>,
+    bytecounts: Vec<u64>,
     image_width: u32,
     image_length: u32,
     bits_per_sample: u16,
@@ -378,8 +395,8 @@ struct Frame {
 
 impl Frame {
     fn new(
-        tileoffsets: Vec<u64>,
-        tilebytecounts: Vec<u64>,
+        offsets: Vec<u64>,
+        bytecounts: Vec<u64>,
         image_width: u32,
         image_length: u32,
         bits_per_sample: u16,
@@ -388,8 +405,8 @@ impl Frame {
         tile_length: u16,
     ) -> Self {
         Frame {
-            tileoffsets,
-            tilebytecounts,
+            offsets,
+            bytecounts,
             image_width,
             image_length,
             bits_per_sample,
@@ -455,7 +472,7 @@ pub struct IJTiffFile {
     frames: HashMap<(usize, usize, usize), Frame>,
     hashes: HashMap<u64, u64>,
     threads: HashMap<(usize, usize, usize), JoinHandle<CompressedFrame>>,
-    pub shape: (usize, usize, usize),
+    pub compression_level: i32,
     pub colors: Colors,
     pub comment: Option<String>,
     pub px_size: Option<f64>,
@@ -473,7 +490,7 @@ impl Drop for IJTiffFile {
 }
 
 impl IJTiffFile {
-    pub fn new(path: &str, shape: (usize, usize, usize)) -> Result<Self> {
+    pub fn new(path: &str) -> Result<Self> {
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -490,7 +507,7 @@ impl IJTiffFile {
             frames: HashMap::new(),
             hashes: HashMap::new(),
             threads: HashMap::new(),
-            shape,
+            compression_level: DEFAULT_COMPRESSION_LEVEL,
             colors: Colors::None,
             comment: None,
             px_size: None,
@@ -500,19 +517,23 @@ impl IJTiffFile {
         })
     }
 
-    pub fn description(&self) -> String {
+    pub fn set_compression_level(&mut self, compression_level: i32) {
+        self.compression_level = compression_level;
+    }
+
+    pub fn description(&self, c_size: usize, z_size: usize, t_size: usize) -> String {
         let mut desc: String = String::from("ImageJ=1.11a");
         if let Colors::None = self.colors {
-            desc += &format!("\nimages={}", self.shape.0);
-            desc += &format!("\nslices={}", self.shape.1);
-            desc += &format!("\nframes={}", self.shape.2);
+            desc += &format!("\nimages={}", c_size);
+            desc += &format!("\nslices={}", z_size);
+            desc += &format!("\nframes={}", t_size);
         } else {
-            desc += &format!("\nimages={}", self.shape.0 * self.shape.1 * self.shape.2);
-            desc += &format!("\nchannels={}", self.shape.0);
-            desc += &format!("\nslices={}", self.shape.1);
-            desc += &format!("\nframes={}", self.shape.2);
+            desc += &format!("\nimages={}", c_size * z_size * t_size);
+            desc += &format!("\nchannels={}", c_size);
+            desc += &format!("\nslices={}", z_size);
+            desc += &format!("\nframes={}", t_size);
         };
-        if self.shape.0 == 1 {
+        if c_size == 1 {
             desc += "\nmode=grayscale";
         } else {
             desc += "\nmode=composite";
@@ -530,27 +551,33 @@ impl IJTiffFile {
         desc
     }
 
-    fn get_czt(&self, frame_number: usize, channel: u8) -> (usize, usize, usize) {
+    fn get_czt(
+        &self,
+        frame_number: usize,
+        channel: u8,
+        c_size: usize,
+        z_size: usize,
+    ) -> (usize, usize, usize) {
         if let Colors::None = self.colors {
             (
                 channel as usize,
-                frame_number % self.shape.1,
-                frame_number / self.shape.1,
+                frame_number % z_size,
+                frame_number / z_size,
             )
         } else {
             (
-                frame_number % self.shape.0,
-                frame_number / self.shape.0 % self.shape.1,
-                frame_number / self.shape.0 / self.shape.1,
+                frame_number % c_size,
+                frame_number / c_size % z_size,
+                frame_number / c_size / z_size,
             )
         }
     }
 
-    fn spp_and_n_frames(&self) -> (u8, usize) {
+    fn spp_and_n_frames(&self, c_size: usize, z_size: usize, t_size: usize) -> (u8, usize) {
         if let Colors::None = &self.colors {
-            (self.shape.0 as u8, self.shape.1 * self.shape.2)
+            (c_size as u8, z_size * t_size)
         } else {
-            (1, self.shape.0 * self.shape.1 * self.shape.2)
+            (1, c_size * z_size * t_size)
         }
     }
 
@@ -599,7 +626,7 @@ impl IJTiffFile {
     where
         T: Bytes + Clone + Zero + Send + 'static,
     {
-        fn compress<T>(frame: Array2<T>) -> CompressedFrame
+        fn compress<T>(frame: Array2<T>, compression_level: i32) -> CompressedFrame
         where
             T: Bytes + Clone + Zero,
         {
@@ -607,7 +634,7 @@ impl IJTiffFile {
             let image_length = frame.shape()[1] as u32;
             let tile_size = 2usize
                 .pow(
-                    ((image_width as f64 * image_length as f64 / 64f64).log2() / 2f64).round()
+                    ((image_width as f64 * image_length as f64 / 2f64).log2() / 2f64).round()
                         as u32,
                 )
                 .max(16)
@@ -619,7 +646,7 @@ impl IJTiffFile {
                 .collect();
             let bytes = byte_tiles
                 .into_par_iter()
-                .map(|x| encode_all(&*x, 3).unwrap())
+                .map(|x| encode_all(x, compression_level).unwrap())
                 .collect::<Vec<_>>();
             CompressedFrame {
                 bytes,
@@ -630,8 +657,11 @@ impl IJTiffFile {
                 sample_format: T::SAMPLE_FORMAT,
             }
         }
-        self.threads
-            .insert((c, z, t), thread::spawn(move || compress(frame)));
+        let compression_level = self.compression_level;
+        self.threads.insert(
+            (c, z, t),
+            thread::spawn(move || compress(frame, compression_level)),
+        );
         for key in self
             .threads
             .keys()
@@ -652,15 +682,15 @@ impl IJTiffFile {
     }
 
     fn write_frame(&mut self, frame: CompressedFrame, c: usize, z: usize, t: usize) -> Result<()> {
-        let mut tileoffsets = Vec::new();
-        let mut tilebytecounts = Vec::new();
+        let mut offsets = Vec::new();
+        let mut bytecounts = Vec::new();
         for tile in frame.bytes {
-            tilebytecounts.push(tile.len() as u64);
-            tileoffsets.push(self.write(&tile)?);
+            bytecounts.push(tile.len() as u64);
+            offsets.push(self.write(&tile)?);
         }
         let frame = Frame::new(
-            tileoffsets,
-            tilebytecounts,
+            offsets,
+            bytecounts,
             frame.image_width,
             frame.image_length,
             frame.bits_per_sample,
@@ -674,8 +704,8 @@ impl IJTiffFile {
 
     fn tile<T: Clone + Zero>(frame: Array2<T>, size: usize) -> Vec<Array2<T>> {
         let shape = frame.shape();
-        let mut tiles = Vec::new();
         let (n, m) = (shape[0] / size, shape[1] / size);
+        let mut tiles = Vec::new();
         for i in 0..n {
             for j in 0..m {
                 tiles.push(
@@ -726,8 +756,15 @@ impl IJTiffFile {
         }
     }
 
-    fn get_color(&self, _colors: &Vec<u8>, _bits_per_sample: u16) -> Result<Vec<u16>> {
-        todo!();
+    fn get_color(&self, colors: &Vec<u8>, bits_per_sample: u16) -> Result<Vec<u16>> {
+        let mut c = Vec::new();
+        let lvl = if bits_per_sample == 8 { 255 } else { 65535 };
+        for i in 0..=lvl {
+            c.push(i * (colors[0] as u16) / 255);
+            c.push(i * (colors[1] as u16) / 255);
+            c.push(i * (colors[2] as u16) / 255);
+        }
+        Ok(c)
     }
 
     fn close(&mut self) -> Result<()> {
@@ -736,18 +773,33 @@ impl IJTiffFile {
                 self.write_frame(thread.join().unwrap(), c, z, t)?;
             }
         }
+        let mut c_size = 1;
+        let mut z_size = 1;
+        let mut t_size = 1;
+        for (c, z, t) in self.frames.keys() {
+            c_size = c_size.max(c + 1);
+            z_size = z_size.max(z + 1);
+            t_size = t_size.max(t + 1);
+        }
+
         let mut where_to_write_next_ifd_offset = OFFSET - OFFSET_SIZE as u64;
         let mut warn = false;
-        let (samples_per_pixel, n_frames) = self.spp_and_n_frames();
+        let (samples_per_pixel, n_frames) = self.spp_and_n_frames(c_size, t_size, z_size);
         for frame_number in 0..n_frames {
-            if let Some(frame) = self.frames.get(&self.get_czt(frame_number, 0)) {
-                let mut tileoffsets = Vec::new();
-                let mut tilebytecounts = Vec::new();
+            if let Some(frame) = self
+                .frames
+                .get(&self.get_czt(frame_number, 0, c_size, z_size))
+            {
+                let mut offsets = Vec::new();
+                let mut bytecounts = Vec::new();
                 let mut frame_count = 0;
                 for channel in 0..samples_per_pixel {
-                    if let Some(frame_n) = self.frames.get(&self.get_czt(frame_number, channel)) {
-                        tileoffsets.extend(frame_n.tileoffsets.iter());
-                        tilebytecounts.extend(frame_n.tilebytecounts.iter());
+                    if let Some(frame_n) =
+                        self.frames
+                            .get(&self.get_czt(frame_number, channel, c_size, z_size))
+                    {
+                        offsets.extend(frame_n.offsets.iter());
+                        bytecounts.extend(frame_n.bytecounts.iter());
                         frame_count += 1;
                     } else {
                         warn = true;
@@ -758,30 +810,33 @@ impl IJTiffFile {
                 ifd.push_tag(Tag::long(257, &vec![frame.image_length]));
                 ifd.push_tag(Tag::short(258, &vec![frame.bits_per_sample; frame_count]));
                 ifd.push_tag(Tag::short(259, &vec![COMPRESSION]));
-                ifd.push_tag(Tag::ascii(270, &self.description()));
+                ifd.push_tag(Tag::ascii(270, &self.description(c_size, z_size, t_size)));
                 ifd.push_tag(Tag::short(277, &vec![frame_count as u16]));
-                ifd.push_tag(Tag::ascii(305, "tiffwrite_rs"));
+                ifd.push_tag(Tag::ascii(305, "tiffwrite_tllab_NKI"));
                 ifd.push_tag(Tag::short(322, &vec![frame.tile_width]));
                 ifd.push_tag(Tag::short(323, &vec![frame.tile_length]));
-                ifd.push_tag(Tag::long8(324, &tileoffsets));
-                ifd.push_tag(Tag::long8(325, &tilebytecounts));
-                ifd.push_tag(Tag::short(339, &vec![frame.sample_format]));
+                ifd.push_tag(Tag::long8(324, &offsets));
+                ifd.push_tag(Tag::long8(325, &bytecounts));
+                if frame.sample_format > 1 {
+                    ifd.push_tag(Tag::short(339, &vec![frame.sample_format]));
+                }
                 if let Some(px_size) = self.px_size {
                     let r = vec![Rational32::from_f64(px_size).unwrap()];
                     ifd.push_tag(Tag::rational(282, &r));
                     ifd.push_tag(Tag::rational(283, &r));
                     ifd.push_tag(Tag::short(296, &vec![1]));
                 }
-
+                if let Colors::Colormap(_) = &self.colors {
+                    ifd.push_tag(Tag::short(262, &vec![3]));
+                } else if let Colors::None = self.colors {
+                    ifd.push_tag(Tag::short(262, &vec![1]));
+                }
                 if frame_number == 0 {
                     if let Colors::Colormap(colormap) = &self.colors {
                         ifd.push_tag(Tag::short(
                             320,
                             &self.get_colormap(colormap, frame.bits_per_sample),
                         ));
-                        ifd.push_tag(Tag::short(262, &vec![3]));
-                    } else if let Colors::None = self.colors {
-                        ifd.push_tag(Tag::short(262, &vec![1]));
                     }
                 }
                 if frame_number < samples_per_pixel as usize {
@@ -794,12 +849,12 @@ impl IJTiffFile {
                     }
                 }
                 if let Colors::None = &self.colors {
-                    if self.shape.0 > 1 {
+                    if c_size > 1 {
                         ifd.push_tag(Tag::short(284, &vec![2]))
                     }
                 }
                 for channel in 0..samples_per_pixel {
-                    let czt = self.get_czt(frame_number, channel);
+                    let czt = self.get_czt(frame_number, channel, c_size, z_size);
                     if let Some(extra_tags) = self.extra_tags.get(&Some(czt)) {
                         for tag in extra_tags {
                             ifd.push_tag(tag.to_owned())
@@ -811,10 +866,12 @@ impl IJTiffFile {
                         ifd.push_tag(tag.to_owned())
                     }
                 }
-                ifd.push_tag(Tag::ascii(
-                    306,
-                    &format!("{}", Utc::now().format("%Y:%m:%d %H:%M:%S")),
-                ));
+                if frame_number == 0 {
+                    ifd.push_tag(Tag::ascii(
+                        306,
+                        &format!("{}", Utc::now().format("%Y:%m:%d %H:%M:%S")),
+                    ));
+                }
                 where_to_write_next_ifd_offset = ifd.write(self, where_to_write_next_ifd_offset)?;
             } else {
                 warn = true;

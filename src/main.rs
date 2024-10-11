@@ -4,7 +4,8 @@ use tiffwrite::IJTiffFile;
 
 fn main() -> Result<()> {
     println!("Hello World!");
-    let mut f = IJTiffFile::new("foo.tif", (2, 1, 1))?;
+    let mut f = IJTiffFile::new("foo.tif")?;
+    f.set_compression_level(10);
     let mut arr = Array2::<u16>::zeros((100, 100));
     for i in 0..arr.shape()[0] {
         for j in 0..arr.shape()[1] {
