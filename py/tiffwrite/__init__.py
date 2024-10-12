@@ -3,8 +3,10 @@ from __future__ import annotations
 from itertools import product
 from pathlib import Path
 from typing import Any, Sequence
+from warnings import warn
 
 import colorcet
+import matplotlib
 import numpy as np
 from matplotlib import colors as mpl_colors
 from numpy.typing import ArrayLike, DTypeLike
@@ -12,12 +14,12 @@ from tqdm.auto import tqdm
 
 from . import tiffwrite_rs as rs  # noqa
 
-
 __all__ = ['Header', 'IJTiffFile', 'IFD', 'FrameInfo', 'Tag', 'Strip', 'tiffwrite']
 
 
 class Header:
     pass
+
 
 class IFD(dict):
     pass
@@ -32,38 +34,60 @@ CZT = tuple[int, int, int]
 FrameInfo = tuple[np.ndarray, None, CZT]
 
 
+class TiffWriteWarning(UserWarning):
+    pass
+
+
 class IJTiffFile(rs.IJTiffFile):
-    def __new__(cls, path: str | Path, shape: tuple[int, int, int] = None, dtype: DTypeLike = 'uint16',
-                colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,
-                deltaz: float = None, timeinterval: float = None, compression: int = None, comment: str = None,
-                **extratags: Tag) -> IJTiffFile:
-        new = super().__new__(cls, str(path))
+    """ Writes a tiff file in a format that the BioFormats reader in Fiji understands.
+        file:           filename of the new tiff file
+        shape:          not used anymore
+        dtype:          datatype to use when saving to tiff
+        colors:         a tuple with a color per channel, chosen from matplotlib.colors, html colors are also possible
+        colormap:       name of a colormap from colorcet
+        pxsize:         pixel size in um
+        deltaz:         z slice interval in um
+        timeinterval:   time between frames in seconds
+        extratags:      other tags to be saved, example: (Tag.ascii(315, 'John Doe'), Tag.bytes(4567, [400, 500])
+                            or (Tag.ascii(33432, 'Made by me'),).
+    """
+    def __new__(cls, path: str | Path, *args, **kwargs) -> IJTiffFile:
+        return super().__new__(cls, str(path))
+
+    def __init__(self, path: str | Path, shape: tuple[int, int, int] = None, dtype: DTypeLike = 'uint16',
+                 colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,
+                 deltaz: float = None, timeinterval: float = None, compression: int = None, comment: str = None,
+                 extratags: Sequence[Tag] = None) -> None:
+        self.path = Path(path)
+        self.shape = shape
+        self.dtype = np.dtype(dtype)
         if compression is not None:
             if isinstance(compression, Sequence):
                 compression = compression[-1]
-            new.set_compression_level(compression)
+            self.set_compression_level(compression)
         if colors is not None:
-            new.colors = np.array([get_color(color) for color in colors])
+            self.colors = np.array([get_color(color) for color in colors])
         if colormap is not None:
-            new.colormap = get_colormap(colormap)
+            self.colormap = get_colormap(colormap)
         if pxsize is not None:
-            new.px_size = float(pxsize)
+            self.px_size = float(pxsize)
         if deltaz is not None:
-            new.delta_z = float(deltaz)
+            self.delta_z = float(deltaz)
         if timeinterval is not None:
-            new.time_interval = float(timeinterval)
+            self.time_interval = float(timeinterval)
         if comment is not None:
-            new.comment = comment
-        for extra_tag in extratags:
-            new.append_extra_tag(extra_tag, None)
-        return new
-
-    def __init__(self, path: str | Path, shape: tuple[int, int, int] = None, dtype: DTypeLike = 'uint16',  # noqa
-                 colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,  # noqa
-                 deltaz: float = None, timeinterval: float = None, comment: str = None,  # noqa
-                 **extratags:  Tag.Value | Tag) -> None:  # noqa
-        self.path = Path(path)
-        self.dtype = np.dtype(dtype)
+            self.comment = comment
+        if extratags is not None:
+            for extra_tag in extratags:
+                self.append_extra_tag(extra_tag, None)
+        if self.dtype.itemsize == 1 and colors is not None:
+            warn('Fiji will not interpret colors saved in an (u)int8 tif, save as (u)int16 instead.',
+                 TiffWriteWarning, stacklevel=2)
+        if shape is not None:
+            warn('Providing shape is not needed anymore, the argument will be removed in the future.',
+                 DeprecationWarning, stacklevel=2)
+        if colors is not None and colormap is not None:
+            warn('Cannot have colors and colormap simultaneously.', TiffWriteWarning, stacklevel=2)
 
     def __enter__(self) -> IJTiffFile:
         return self
@@ -71,7 +95,8 @@ class IJTiffFile(rs.IJTiffFile):
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
-    def save(self, frame: ArrayLike, c: int, z: int, t: int) -> None:
+    def save(self, frame: ArrayLike, c: int, z: int, t: int, extratags: Sequence[Tag] = None) -> None:
+        """ save a 2d numpy array to the tiff at channel=c, slice=z, time=t, with optional extra tif tags """
         for frame, _, (cn, zn, tn) in self.compress_frame(frame):
             frame = np.asarray(frame).astype(self.dtype)
             match self.dtype:
@@ -97,15 +122,36 @@ class IJTiffFile(rs.IJTiffFile):
                     self.save_f64(frame, c + cn, z + zn, t + tn)
                 case _:
                     raise TypeError(f'Cannot save type {self.dtype}')
+            if extratags is not None:
+                for extra_tag in extratags:
+                    self.append_extra_tag(extra_tag, (c, z, t))
 
     def compress_frame(self, frame: ArrayLike) -> tuple[FrameInfo]:  # noqa
+        """ backwards compatibility """
         return (frame, None, (0, 0, 0)),
 
+
 def get_colormap(colormap: str) -> np.ndarray:
-    colormap = getattr(colorcet, colormap)
-    colormap[0] = '#ffffff'
-    colormap[-1] = '#000000'
-    return np.array([[int(''.join(i), 16) for i in zip(*[iter(s[1:])] * 2)] for s in colormap]).astype('uint8')
+    if hasattr(colorcet, colormap.rstrip('_r')):
+        cm = np.array([[int(''.join(i), 16) for i in zip(*[iter(s[1:])] * 2)]
+                        for s in getattr(colorcet, colormap.rstrip('_r'))]).astype('uint8')
+        if colormap.endswith('_r'):
+            cm = cm[::-1]
+        if colormap.startswith('glasbey') or colormap.endswith('glasbey'):
+            cm[0] = 0, 0, 0
+            cm[-1] = 255, 255, 255
+    else:
+        cmap = matplotlib.colormaps.get_cmap(colormap)
+        if cmap.N < 256:
+            cm = (255 * np.vstack(((0, 0, 0),
+                                   matplotlib.cm.ScalarMappable(matplotlib.colors.Normalize(1, 254),
+                                                                cmap).to_rgba(np.arange(1, 254))[:, :3],
+                                   (1, 1, 1)))).astype('uint8')
+        else:
+            cm = (255 * matplotlib.cm.ScalarMappable(matplotlib.colors.Normalize(0, 255), cmap)
+                  .to_rgba(np.arange(256))[:, :3]).astype('uint8')
+    return cm
+
 
 def get_color(color: str) -> np.ndarray:
     return np.array([int(''.join(i), 16) for i in zip(*[iter(mpl_colors.to_hex(color)[1:])] * 2)]).astype('uint8')
@@ -131,10 +177,7 @@ def tiffwrite(file: str | Path, data: np.ndarray, axes: str = 'TZCXY', dtype: DT
             data = np.expand_dims(data, axis)
 
     shape = data.shape[:3]
-    with IJTiffFile(file, shape, data.dtype if dtype is None else dtype, *args, **kwargs) as f:  # type: ignore
-        at_least_one = False
+    with IJTiffFile(file, dtype=data.dtype if dtype is None else dtype, *args, **kwargs) as f:
         for n in tqdm(product(*[range(i) for i in shape]), total=np.prod(shape),  # type: ignore
                       desc='Saving tiff', disable=not bar):
-            if np.any(data[n]) or not at_least_one:
-                f.save(data[n], *n)
-                at_least_one = True
+            f.save(data[n], *n)

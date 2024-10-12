@@ -15,11 +15,11 @@ classifiers = [
 dependencies = ["colorcet", "matplotlib", "numpy", "tqdm"]
 
 [project.optional-dependencies]
-test = ["pytest", "tifffile"]
+test = ["pytest", "tifffile", "imagecodecs"]
 
 [tool.maturin]
 python-source = "py"
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "python"]
 module-name = "tiffwrite.tiffwrite_rs"
 
 [tool.isort]

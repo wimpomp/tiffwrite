@@ -1,4 +1,4 @@
-#[cfg(not(feature = "nopython"))]
+#[cfg(feature = "python")]
 mod py;
 
 use anyhow::Result;
@@ -6,26 +6,30 @@ use chrono::Utc;
 use ndarray::{s, Array2};
 use num::{traits::ToBytes, Complex, FromPrimitive, Rational32, Zero};
 use rayon::prelude::*;
-use std::{cmp::Ordering, collections::HashMap};
 use std::fs::{File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{copy, Read, Seek, SeekFrom, Write};
-use std::{thread, thread::JoinHandle};
-use zstd::{DEFAULT_COMPRESSION_LEVEL, stream::Encoder};
+use std::time::Duration;
+use std::{cmp::Ordering, collections::HashMap};
+use std::{
+    thread,
+    thread::{sleep, JoinHandle},
+};
+use zstd::{stream::Encoder, DEFAULT_COMPRESSION_LEVEL};
 
 const TAG_SIZE: usize = 20;
 const OFFSET_SIZE: usize = 8;
 const OFFSET: u64 = 16;
 const COMPRESSION: u16 = 50000;
 
-pub fn encode_all(source: Vec<u8>, level: i32) -> Result<Vec<u8>> {
+fn encode_all(source: Vec<u8>, level: i32) -> Result<Vec<u8>> {
     let mut result = Vec::<u8>::new();
     copy_encode(&*source, &mut result, level, source.len() as u64)?;
     Ok(result)
 }
 
 /// copy_encode from zstd crate, but let it include the content size in the zstd block header
-pub fn copy_encode<R, W>(mut source: R, destination: W, level: i32, length: u64) -> Result<()>
+fn copy_encode<R, W>(mut source: R, destination: W, level: i32, length: u64) -> Result<()>
 where
     R: Read,
     W: Write,
@@ -518,7 +522,7 @@ impl IJTiffFile {
     }
 
     pub fn set_compression_level(&mut self, compression_level: i32) {
-        self.compression_level = compression_level;
+        self.compression_level = compression_level.max(-7).min(22);
     }
 
     pub fn description(&self, c_size: usize, z_size: usize, t_size: usize) -> String {
@@ -644,10 +648,17 @@ impl IJTiffFile {
                 .into_iter()
                 .map(|tile| tile.map(|x| x.bytes()).into_iter().flatten().collect())
                 .collect();
-            let bytes = byte_tiles
-                .into_par_iter()
-                .map(|x| encode_all(x, compression_level).unwrap())
-                .collect::<Vec<_>>();
+            let bytes = if byte_tiles.len() > 4 {
+                byte_tiles
+                    .into_par_iter()
+                    .map(|x| encode_all(x, compression_level).unwrap())
+                    .collect::<Vec<_>>()
+            } else {
+                byte_tiles
+                    .into_iter()
+                    .map(|x| encode_all(x, compression_level).unwrap())
+                    .collect::<Vec<_>>()
+            };
             CompressedFrame {
                 bytes,
                 image_width,
@@ -657,22 +668,24 @@ impl IJTiffFile {
                 sample_format: T::SAMPLE_FORMAT,
             }
         }
+        loop {
+            self.collect_threads(false)?;
+            if self.threads.len() < 48 {
+                break;
+            }
+            sleep(Duration::from_millis(100));
+        }
         let compression_level = self.compression_level;
         self.threads.insert(
             (c, z, t),
             thread::spawn(move || compress(frame, compression_level)),
         );
-        for key in self
-            .threads
-            .keys()
-            .cloned()
-            .collect::<Vec<(usize, usize, usize)>>()
-        {
-            if self.threads[&key].is_finished() {}
-        }
+        Ok(())
+    }
 
+    fn collect_threads(&mut self, block: bool) -> Result<()> {
         for (c, z, t) in self.threads.keys().cloned().collect::<Vec<_>>() {
-            if self.threads[&(c, z, t)].is_finished() {
+            if block | self.threads[&(c, z, t)].is_finished() {
                 if let Some(thread) = self.threads.remove(&(c, z, t)) {
                     self.write_frame(thread.join().unwrap(), c, z, t)?;
                 }
@@ -739,40 +752,33 @@ impl IJTiffFile {
     }
 
     fn get_colormap(&self, colormap: &Vec<Vec<u8>>, bits_per_sample: u16) -> Vec<u16> {
-        if bits_per_sample == 8 {
-            colormap
-                .iter()
-                .flatten()
-                .map(|x| (*x as u16) * 256)
-                .collect()
-        } else {
-            colormap
-                .iter()
-                .map(|x| vec![x; 256])
-                .flatten()
-                .flatten()
-                .map(|x| (*x as u16) * 256)
-                .collect()
+        let mut r = Vec::new();
+        let mut g = Vec::new();
+        let mut b = Vec::new();
+        let n = 2usize.pow(bits_per_sample as u32 - 8);
+        for color in colormap {
+            r.extend(vec![(color[0] as u16) * 257; n]);
+            g.extend(vec![(color[1] as u16) * 257; n]);
+            b.extend(vec![(color[2] as u16) * 257; n]);
         }
+        r.extend(g);
+        r.extend(b);
+        r
     }
 
-    fn get_color(&self, colors: &Vec<u8>, bits_per_sample: u16) -> Result<Vec<u16>> {
+    fn get_color(&self, colors: &Vec<u8>, bits_per_sample: u16) -> Vec<u16> {
         let mut c = Vec::new();
-        let lvl = if bits_per_sample == 8 { 255 } else { 65535 };
-        for i in 0..=lvl {
-            c.push(i * (colors[0] as u16) / 255);
-            c.push(i * (colors[1] as u16) / 255);
-            c.push(i * (colors[2] as u16) / 255);
+        let n = 2usize.pow(bits_per_sample as u32 - 8);
+        for color in colors {
+            for i in 0..256 {
+                c.extend(vec![i * (*color as u16) / 255 * 257; n])
+            }
         }
-        Ok(c)
+        c
     }
 
     fn close(&mut self) -> Result<()> {
-        for (c, z, t) in self.threads.keys().cloned().collect::<Vec<_>>() {
-            if let Some(thread) = self.threads.remove(&(c, z, t)) {
-                self.write_frame(thread.join().unwrap(), c, z, t)?;
-            }
-        }
+        self.collect_threads(true)?;
         let mut c_size = 1;
         let mut z_size = 1;
         let mut t_size = 1;
@@ -812,7 +818,7 @@ impl IJTiffFile {
                 ifd.push_tag(Tag::short(259, &vec![COMPRESSION]));
                 ifd.push_tag(Tag::ascii(270, &self.description(c_size, z_size, t_size)));
                 ifd.push_tag(Tag::short(277, &vec![frame_count as u16]));
-                ifd.push_tag(Tag::ascii(305, "tiffwrite_tllab_NKI"));
+                ifd.push_tag(Tag::ascii(305, "tiffwrite_rs"));
                 ifd.push_tag(Tag::short(322, &vec![frame.tile_width]));
                 ifd.push_tag(Tag::short(323, &vec![frame.tile_length]));
                 ifd.push_tag(Tag::long8(324, &offsets));
@@ -824,7 +830,6 @@ impl IJTiffFile {
                     let r = vec![Rational32::from_f64(px_size).unwrap()];
                     ifd.push_tag(Tag::rational(282, &r));
                     ifd.push_tag(Tag::rational(283, &r));
-                    ifd.push_tag(Tag::short(296, &vec![1]));
                 }
                 if let Colors::Colormap(_) = &self.colors {
                     ifd.push_tag(Tag::short(262, &vec![3]));
@@ -839,11 +844,11 @@ impl IJTiffFile {
                         ));
                     }
                 }
-                if frame_number < samples_per_pixel as usize {
+                if frame_number < c_size {
                     if let Colors::Colors(colors) = &self.colors {
                         ifd.push_tag(Tag::short(
                             320,
-                            &self.get_color(&colors[frame_number], frame.bits_per_sample)?,
+                            &self.get_color(&colors[frame_number], frame.bits_per_sample),
                         ));
                         ifd.push_tag(Tag::short(262, &vec![3]));
                     }

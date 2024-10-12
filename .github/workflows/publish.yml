@@ -1,0 +1,24 @@
+name: Publish
+
+on: workflow_dispatch
+
+jobs:
+  publish_wheels:
+    uses: ./.github/workflows/wheels.yml
+  publish:
+    name: publish
+    needs: publish_wheels
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          # unpacks all tiffwrite artifacts into dist/
+          pattern: tiffwrite-*
+          path: dist
+          merge-multiple: true
+      - name: Publish package to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          repository-url: https://upload.pypi.org/legacy/

@@ -10,7 +10,7 @@ from tiffwrite import IJTiffFile
 @pytest.mark.parametrize('dtype', ('uint8', 'uint16', 'uint32', 'uint64',
                                    'int8', 'int16', 'int32', 'int64', 'float32', 'float64'))
 def test_single(tmp_path: Path, dtype) -> None:
-    with IJTiffFile(tmp_path / 'test.tif', dtype=dtype) as tif:
+    with IJTiffFile(tmp_path / 'test.tif', dtype=dtype, pxsize=0.1, deltaz=0.5, timeinterval=6.5) as tif:
         a0, b0 = np.meshgrid(range(100), range(100))
         a0[::2, :] = 0
         b0[:, ::2] = 1
