@@ -6,6 +6,7 @@ use chrono::Utc;
 use ndarray::{s, Array2};
 use num::{traits::ToBytes, Complex, FromPrimitive, Rational32, Zero};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{copy, Read, Seek, SeekFrom, Write};
@@ -44,37 +45,32 @@ where
 
 #[derive(Clone, Debug)]
 struct IFD {
-    tags: Vec<Tag>,
+    tags: HashSet<Tag>,
 }
 
 impl IFD {
     pub fn new() -> Self {
-        IFD { tags: Vec::new() }
-    }
-
-    fn push_tag(&mut self, tag: Tag) {
-        if !self.tags.contains(&tag) {
-            self.tags.push(tag);
+        IFD {
+            tags: HashSet::new(),
         }
     }
 
     fn write(&mut self, ijtifffile: &mut IJTiffFile, where_to_write_offset: u64) -> Result<u64> {
-        self.tags.sort();
+        let mut tags = self.tags.drain().collect::<Vec<_>>();
+        tags.sort();
         ijtifffile.file.seek(SeekFrom::End(0))?;
         if ijtifffile.file.stream_position()? % 2 == 1 {
             ijtifffile.file.write(&[0])?;
         }
         let offset = ijtifffile.file.stream_position()?;
-        ijtifffile
-            .file
-            .write(&(self.tags.len() as u64).to_le_bytes())?;
+        ijtifffile.file.write(&(tags.len() as u64).to_le_bytes())?;
 
-        for tag in self.tags.iter_mut() {
+        for tag in tags.iter_mut() {
             tag.write_tag(ijtifffile)?;
         }
         let where_to_write_next_ifd_offset = ijtifffile.file.stream_position()?;
         ijtifffile.file.write(&vec![0u8; OFFSET_SIZE])?;
-        for tag in self.tags.iter() {
+        for tag in tags.iter() {
             tag.write_data(ijtifffile)?;
         }
         ijtifffile
@@ -108,6 +104,12 @@ impl Ord for Tag {
 impl PartialEq for Tag {
     fn eq(&self, other: &Self) -> bool {
         self.code == other.code
+    }
+}
+
+impl Hash for Tag {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.code.hash(state);
     }
 }
 
@@ -307,15 +309,27 @@ impl Tag {
         )
     }
 
-    pub fn ifd8(code: u16, ifd8: &Vec<u64>) -> Self {
+    pub fn ifd8(code: u16, value: &Vec<u64>) -> Self {
         Tag::new(
             code,
-            ifd8.into_iter()
+            value
+                .into_iter()
                 .map(|x| x.to_le_bytes())
                 .flatten()
                 .collect(),
             18,
         )
+    }
+
+    pub fn short_long_or_long8(code: u16, value: &Vec<u64>) -> Self {
+        let m = *value.iter().max().unwrap();
+        if m < 65536 {
+            Tag::short(code, &value.into_iter().map(|x| *x as u16).collect())
+        } else if m < 4294967296 {
+            Tag::long(code, &value.into_iter().map(|x| *x as u32).collect())
+        } else {
+            Tag::long8(code, value)
+        }
     }
 
     pub fn count(&self) -> u64 {
@@ -685,7 +699,7 @@ impl IJTiffFile {
 
     fn collect_threads(&mut self, block: bool) -> Result<()> {
         for (c, z, t) in self.threads.keys().cloned().collect::<Vec<_>>() {
-            if block | self.threads[&(c, z, t)].is_finished() {
+            if block || self.threads[&(c, z, t)].is_finished() {
                 if let Some(thread) = self.threads.remove(&(c, z, t)) {
                     self.write_frame(thread.join().unwrap(), c, z, t)?;
                 }
@@ -812,33 +826,35 @@ impl IJTiffFile {
                     }
                 }
                 let mut ifd = IFD::new();
-                ifd.push_tag(Tag::long(256, &vec![frame.image_width]));
-                ifd.push_tag(Tag::long(257, &vec![frame.image_length]));
-                ifd.push_tag(Tag::short(258, &vec![frame.bits_per_sample; frame_count]));
-                ifd.push_tag(Tag::short(259, &vec![COMPRESSION]));
-                ifd.push_tag(Tag::ascii(270, &self.description(c_size, z_size, t_size)));
-                ifd.push_tag(Tag::short(277, &vec![frame_count as u16]));
-                ifd.push_tag(Tag::ascii(305, "tiffwrite_rs"));
-                ifd.push_tag(Tag::short(322, &vec![frame.tile_width]));
-                ifd.push_tag(Tag::short(323, &vec![frame.tile_length]));
-                ifd.push_tag(Tag::long8(324, &offsets));
-                ifd.push_tag(Tag::long8(325, &bytecounts));
+                ifd.tags.insert(Tag::long(256, &vec![frame.image_width]));
+                ifd.tags.insert(Tag::long(257, &vec![frame.image_length]));
+                ifd.tags
+                    .insert(Tag::short(258, &vec![frame.bits_per_sample; frame_count]));
+                ifd.tags.insert(Tag::short(259, &vec![COMPRESSION]));
+                ifd.tags
+                    .insert(Tag::ascii(270, &self.description(c_size, z_size, t_size)));
+                ifd.tags.insert(Tag::short(277, &vec![frame_count as u16]));
+                ifd.tags.insert(Tag::ascii(305, "tiffwrite_rs"));
+                ifd.tags.insert(Tag::short(322, &vec![frame.tile_width]));
+                ifd.tags.insert(Tag::short(323, &vec![frame.tile_length]));
+                ifd.tags.insert(Tag::short_long_or_long8(324, &offsets));
+                ifd.tags.insert(Tag::short_long_or_long8(325, &bytecounts));
                 if frame.sample_format > 1 {
-                    ifd.push_tag(Tag::short(339, &vec![frame.sample_format]));
+                    ifd.tags.insert(Tag::short(339, &vec![frame.sample_format]));
                 }
                 if let Some(px_size) = self.px_size {
                     let r = vec![Rational32::from_f64(px_size).unwrap()];
-                    ifd.push_tag(Tag::rational(282, &r));
-                    ifd.push_tag(Tag::rational(283, &r));
+                    ifd.tags.insert(Tag::rational(282, &r));
+                    ifd.tags.insert(Tag::rational(283, &r));
                 }
                 if let Colors::Colormap(_) = &self.colors {
-                    ifd.push_tag(Tag::short(262, &vec![3]));
+                    ifd.tags.insert(Tag::short(262, &vec![3]));
                 } else if let Colors::None = self.colors {
-                    ifd.push_tag(Tag::short(262, &vec![1]));
+                    ifd.tags.insert(Tag::short(262, &vec![1]));
                 }
                 if frame_number == 0 {
                     if let Colors::Colormap(colormap) = &self.colors {
-                        ifd.push_tag(Tag::short(
+                        ifd.tags.insert(Tag::short(
                             320,
                             &self.get_colormap(colormap, frame.bits_per_sample),
                         ));
@@ -846,33 +862,33 @@ impl IJTiffFile {
                 }
                 if frame_number < c_size {
                     if let Colors::Colors(colors) = &self.colors {
-                        ifd.push_tag(Tag::short(
+                        ifd.tags.insert(Tag::short(
                             320,
                             &self.get_color(&colors[frame_number], frame.bits_per_sample),
                         ));
-                        ifd.push_tag(Tag::short(262, &vec![3]));
+                        ifd.tags.insert(Tag::short(262, &vec![3]));
                     }
                 }
                 if let Colors::None = &self.colors {
                     if c_size > 1 {
-                        ifd.push_tag(Tag::short(284, &vec![2]))
+                        ifd.tags.insert(Tag::short(284, &vec![2]));
                     }
                 }
                 for channel in 0..samples_per_pixel {
                     let czt = self.get_czt(frame_number, channel, c_size, z_size);
                     if let Some(extra_tags) = self.extra_tags.get(&Some(czt)) {
                         for tag in extra_tags {
-                            ifd.push_tag(tag.to_owned())
+                            ifd.tags.insert(tag.to_owned());
                         }
                     }
                 }
                 if let Some(extra_tags) = self.extra_tags.get(&None) {
                     for tag in extra_tags {
-                        ifd.push_tag(tag.to_owned())
+                        ifd.tags.insert(tag.to_owned());
                     }
                 }
                 if frame_number == 0 {
-                    ifd.push_tag(Tag::ascii(
+                    ifd.tags.insert(Tag::ascii(
                         306,
                         &format!("{}", Utc::now().format("%Y:%m:%d %H:%M:%S")),
                     ));
