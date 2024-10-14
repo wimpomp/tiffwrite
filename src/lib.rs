@@ -123,20 +123,20 @@ impl Tag {
         }
     }
 
-    pub fn byte(code: u16, byte: &Vec<u8>) -> Self {
-        Tag::new(code, byte.to_owned(), 1)
+    pub fn byte(code: u16, value: &Vec<u8>) -> Self {
+        Tag::new(code, value.to_owned(), 1)
     }
 
-    pub fn ascii(code: u16, ascii: &str) -> Self {
-        let mut bytes = ascii.as_bytes().to_vec();
+    pub fn ascii(code: u16, value: &str) -> Self {
+        let mut bytes = value.as_bytes().to_vec();
         bytes.push(0);
         Tag::new(code, bytes, 2)
     }
 
-    pub fn short(code: u16, short: &Vec<u16>) -> Self {
+    pub fn short(code: u16, value: &Vec<u16>) -> Self {
         Tag::new(
             code,
-            short
+            value
                 .into_iter()
                 .map(|x| x.to_le_bytes())
                 .flatten()
@@ -145,10 +145,10 @@ impl Tag {
         )
     }
 
-    pub fn long(code: u16, long: &Vec<u32>) -> Self {
+    pub fn long(code: u16, value: &Vec<u32>) -> Self {
         Tag::new(
             code,
-            long.into_iter()
+            value.into_iter()
                 .map(|x| x.to_le_bytes())
                 .flatten()
                 .collect(),
@@ -156,10 +156,10 @@ impl Tag {
         )
     }
 
-    pub fn rational(code: u16, rational: &Vec<Rational32>) -> Self {
+    pub fn rational(code: u16, value: &Vec<Rational32>) -> Self {
         Tag::new(
             code,
-            rational
+            value
                 .into_iter()
                 .map(|x| {
                     u32::try_from(*x.denom())
@@ -175,18 +175,18 @@ impl Tag {
         )
     }
 
-    pub fn sbyte(code: u16, sbyte: &Vec<i8>) -> Self {
+    pub fn sbyte(code: u16, value: &Vec<i8>) -> Self {
         Tag::new(
             code,
-            sbyte.iter().map(|x| x.to_le_bytes()).flatten().collect(),
+            value.iter().map(|x| x.to_le_bytes()).flatten().collect(),
             6,
         )
     }
 
-    pub fn sshort(code: u16, sshort: &Vec<i16>) -> Self {
+    pub fn sshort(code: u16, value: &Vec<i16>) -> Self {
         Tag::new(
             code,
-            sshort
+            value
                 .into_iter()
                 .map(|x| x.to_le_bytes())
                 .flatten()
@@ -195,10 +195,10 @@ impl Tag {
         )
     }
 
-    pub fn slong(code: u16, slong: &Vec<i32>) -> Self {
+    pub fn slong(code: u16, value: &Vec<i32>) -> Self {
         Tag::new(
             code,
-            slong
+            value
                 .into_iter()
                 .map(|x| x.to_le_bytes())
                 .flatten()
@@ -207,10 +207,10 @@ impl Tag {
         )
     }
 
-    pub fn srational(code: u16, srational: &Vec<Rational32>) -> Self {
+    pub fn srational(code: u16, value: &Vec<Rational32>) -> Self {
         Tag::new(
             code,
-            srational
+            value
                 .into_iter()
                 .map(|x| {
                     i32::try_from(*x.denom())
@@ -226,10 +226,10 @@ impl Tag {
         )
     }
 
-    pub fn float(code: u16, float: &Vec<f32>) -> Self {
+    pub fn float(code: u16, value: &Vec<f32>) -> Self {
         Tag::new(
             code,
-            float
+            value
                 .into_iter()
                 .map(|x| x.to_le_bytes())
                 .flatten()
@@ -238,10 +238,10 @@ impl Tag {
         )
     }
 
-    pub fn double(code: u16, double: &Vec<f64>) -> Self {
+    pub fn double(code: u16, value: &Vec<f64>) -> Self {
         Tag::new(
             code,
-            double
+            value
                 .into_iter()
                 .map(|x| x.to_le_bytes())
                 .flatten()
@@ -250,16 +250,16 @@ impl Tag {
         )
     }
 
-    pub fn ifd(code: u16, ifd: &Vec<u32>) -> Self {
+    pub fn ifd(code: u16, value: &Vec<u32>) -> Self {
         Tag::new(
             code,
-            ifd.into_iter().map(|x| x.to_le_bytes()).flatten().collect(),
+            value.into_iter().map(|x| x.to_le_bytes()).flatten().collect(),
             13,
         )
     }
 
-    pub fn unicode(code: u16, unicode: &str) -> Self {
-        let mut bytes: Vec<u8> = unicode
+    pub fn unicode(code: u16, value: &str) -> Self {
+        let mut bytes: Vec<u8> = value
             .encode_utf16()
             .map(|x| x.to_le_bytes())
             .flatten()
@@ -268,10 +268,10 @@ impl Tag {
         Tag::new(code, bytes, 14)
     }
 
-    pub fn complex(code: u16, complex: &Vec<Complex<f32>>) -> Self {
+    pub fn complex(code: u16, value: &Vec<Complex<f32>>) -> Self {
         Tag::new(
             code,
-            complex
+            value
                 .into_iter()
                 .map(|x| {
                     x.re.to_le_bytes()
@@ -285,10 +285,10 @@ impl Tag {
         )
     }
 
-    pub fn long8(code: u16, long8: &Vec<u64>) -> Self {
+    pub fn long8(code: u16, value: &Vec<u64>) -> Self {
         Tag::new(
             code,
-            long8
+            value
                 .into_iter()
                 .map(|x| x.to_le_bytes())
                 .flatten()
@@ -297,10 +297,10 @@ impl Tag {
         )
     }
 
-    pub fn slong8(code: u16, slong8: &Vec<i64>) -> Self {
+    pub fn slong8(code: u16, value: &Vec<i64>) -> Self {
         Tag::new(
             code,
-            slong8
+            value
                 .into_iter()
                 .map(|x| x.to_le_bytes())
                 .flatten()

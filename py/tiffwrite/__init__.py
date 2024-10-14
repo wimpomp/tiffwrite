@@ -138,15 +138,15 @@ def get_colormap(colormap: str) -> np.ndarray:
         if colormap.endswith('_r'):
             cm = cm[::-1]
         if colormap.startswith('glasbey') or colormap.endswith('glasbey'):
-            cm[0] = 0, 0, 0
-            cm[-1] = 255, 255, 255
+            cm[0] = 255, 255, 255
+            cm[-1] = 0, 0, 0
     else:
         cmap = matplotlib.colormaps.get_cmap(colormap)
         if cmap.N < 256:
-            cm = (255 * np.vstack(((0, 0, 0),
+            cm = (255 * np.vstack(((1, 1, 1),
                                    matplotlib.cm.ScalarMappable(matplotlib.colors.Normalize(1, 254),
                                                                 cmap).to_rgba(np.arange(1, 254))[:, :3],
-                                   (1, 1, 1)))).astype('uint8')
+                                   (0, 0, 0)))).astype('uint8')
         else:
             cm = (255 * matplotlib.cm.ScalarMappable(matplotlib.colors.Normalize(0, 255), cmap)
                   .to_rgba(np.arange(256))[:, :3]).astype('uint8')
