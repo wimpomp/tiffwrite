@@ -18,3 +18,7 @@ jobs:
       - name: Check path
         if: runner.os != 'Windows'
         run: echo $PATH
+
+      - name: Check path
+        if: runner.os != 'Windows'
+        run: echo $HOME
