@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from itertools import product
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 from warnings import warn
 
 import colorcet
@@ -18,7 +18,7 @@ __all__ = ['IJTiffFile', 'IJTiffParallel', 'FrameInfo', 'Tag', 'tiffwrite']
 
 
 Tag = rs.Tag
-FrameInfo = tuple[np.ndarray, int, int, int]
+FrameInfo = tuple[ArrayLike, int, int, int]
 
 
 class Header:
@@ -88,7 +88,7 @@ class IJTiffFile(rs.IJTiffFile):
     def __enter__(self) -> IJTiffFile:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *args: Any, **kwargs: Any) -> None:
         self.close()
 
     def save(self, frame: ArrayLike, c: int, z: int, t: int, extratags: Sequence[Tag] = None) -> None:
@@ -179,18 +179,11 @@ try:
     from abc import abstractmethod, ABCMeta
     from functools import wraps
 
-    class IJTiffParallel(ParPool, metaclass=ABCMeta):
-        """ wraps IJTiffFile.save in a parallel pool, the method 'parallel' needs to be overloaded """
 
-        @abstractmethod
-        def parallel(self, frame: Any) -> Sequence[tuple[ArrayLike, int, int, int]]:
-            """ does something with frame in a parallel process,
-                and returns a sequence of frames and offsets to c, z and t to save in the tif """
-
-        @wraps(IJTiffFile.__init__)
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            self.ijtifffile = IJTiffFile(*args, **kwargs)
-            super().__init__(self.parallel)  # noqa
+    class Pool(ParPool):
+        def __init__(self, ijtifffile: IJTiffFile, parallel: Callable[[Any], Sequence[FrameInfo]]):
+            self.ijtifffile = ijtifffile
+            super().__init__(parallel)  # noqa
 
         def done(self, task: Task) -> None:
             c, z, t = task.handle
@@ -198,19 +191,41 @@ try:
             for frame, cn, zn, tn in self[c, z, t]:
                 self.ijtifffile.save(frame, c + cn, z + zn, t + tn)
 
-        @wraps(IJTiffFile.close)
         def close(self) -> None:
             while len(self.tasks):
                 self.get_newest()
             super().close()
             self.ijtifffile.close()
 
+
+    class IJTiffParallel(metaclass=ABCMeta):
+        """ wraps IJTiffFile.save in a parallel pool, the method 'parallel' needs to be overloaded """
+
+        @abstractmethod
+        def parallel(self, frame: Any) -> Sequence[FrameInfo]:
+            """ does something with frame in a parallel process,
+                and returns a sequence of frames and offsets to c, z and t to save in the tif """
+
+        @wraps(IJTiffFile.__init__)
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.ijtifffile = IJTiffFile(*args, **kwargs)
+            self.pool = Pool(self.ijtifffile, self.parallel)
+
+        def __enter__(self) -> IJTiffParallel:
+            return self
+
+        def __exit__(self, *args: Any, **kwargs: Any) -> None:
+            self.close()
+
         @wraps(IJTiffFile.save)
         def save(self, frame: Any, c: int, z: int, t: int, extratags: Sequence[Tag] = None) -> None:
-            self[c, z, t] = frame
+            self.pool[c, z, t] = frame
             if extratags is not None:
                 for extra_tag in extratags:
                     self.ijtifffile.append_extra_tag(extra_tag, (c, z, t))
+
+        def close(self) -> None:
+            self.pool.close()
 
 except ImportError:
     IJTiffPool = None

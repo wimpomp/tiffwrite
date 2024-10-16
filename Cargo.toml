@@ -1,6 +1,6 @@
 [package]
 name = "tiffwrite"
-version = "2024.10.4"
+version = "2024.10.5"
 edition = "2021"
 
 [lib]
