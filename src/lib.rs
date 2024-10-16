@@ -803,7 +803,7 @@ impl IJTiffFile {
         }
 
         let mut where_to_write_next_ifd_offset = OFFSET - OFFSET_SIZE as u64;
-        let mut warn = false;
+        let mut warn = Vec::new();
         let (samples_per_pixel, n_frames) = self.spp_and_n_frames(c_size, t_size, z_size);
         for frame_number in 0..n_frames {
             if let Some(frame) = self
@@ -822,7 +822,7 @@ impl IJTiffFile {
                         bytecounts.extend(frame_n.bytecounts.iter());
                         frame_count += 1;
                     } else {
-                        warn = true;
+                        warn.push((frame_number, channel));
                     }
                 }
                 let mut ifd = IFD::new();
@@ -895,13 +895,16 @@ impl IJTiffFile {
                 }
                 where_to_write_next_ifd_offset = ifd.write(self, where_to_write_next_ifd_offset)?;
             } else {
-                warn = true;
+                warn.push((frame_number, 0));
             }
-            if warn {
-                println!(
-                    "Some frames were not added to the tif file, either you forgot them, \
-                    or an error occurred and the tif file was closed prematurely."
-                )
+            if warn.len() > 0 {
+                println!("The following frames were not added to the tif file");
+                for (frame_number, channel) in &warn {
+                    let (c, z, t) = self.get_czt(*frame_number, *channel, c_size, z_size);
+                    println!("{c}, {z}, {t}")
+                }
+                println!("Either you forgot them, \
+                         or an error occurred and the tif file was closed prematurely.")
             }
         }
         self.file
