@@ -846,6 +846,7 @@ impl IJTiffFile {
                     let r = vec![Rational32::from_f64(px_size).unwrap()];
                     ifd.tags.insert(Tag::rational(282, &r));
                     ifd.tags.insert(Tag::rational(283, &r));
+                    ifd.tags.insert(Tag::short(296, &vec![1]));
                 }
                 if let Colors::Colormap(_) = &self.colors {
                     ifd.tags.insert(Tag::short(262, &vec![3]));
@@ -898,10 +899,10 @@ impl IJTiffFile {
                 warn.push((frame_number, 0));
             }
             if warn.len() > 0 {
-                println!("The following frames were not added to the tif file");
+                println!("The following frames were not added to the tif file:");
                 for (frame_number, channel) in &warn {
                     let (c, z, t) = self.get_czt(*frame_number, *channel, c_size, z_size);
-                    println!("{c}, {z}, {t}")
+                    println!("c: {c}, z: {z}, t: {t}")
                 }
                 println!("Either you forgot them, \
                          or an error occurred and the tif file was closed prematurely.")

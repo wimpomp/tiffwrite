@@ -1,9 +1,9 @@
 [package]
 name = "tiffwrite"
-version = "2024.10.5"
+version = "2024.10.6"
 edition = "2021"
 authors = ["Wim Pomp <w.pomp@nki.nl>"]
-license = "GPLv3"
+license = "GPL-3.0-or-later"
 description = "Write BioFormats/ImageJ compatible tiffs with zstd compression in parallel."
 homepage = "https://github.com/wimpomp/tiffwrite"
 repository = "https://github.com/wimpomp/tiffwrite"
