@@ -20,8 +20,13 @@ jobs:
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==2.21.3
 
-      - run: export PATH="$HOME/.cargo/bin:$PATH"
-      - run: echo $PATH
+      - name: Set path
+        if: runner.os != 'Windows'
+        run: export PATH="$HOME/.cargo/bin:$PATH"
+
+      - name: Check path
+        if: runner.os != 'Windows'
+        run: echo $PATH
 
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
