@@ -9,16 +9,16 @@ jobs:
     name: publish
     needs: publish_wheels
     runs-on: ubuntu-latest
-    environment: pypi
+    environment:
+      name: pypi
+      url: https://pypi.org/p/tiffwrite
+    permissions:
+      id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download all the dists
+        uses: actions/download-artifact@v4
         with:
-          # unpacks all tiffwrite artifacts into dist/
-          pattern: tiffwrite-*
-          path: dist
-          merge-multiple: true
-      - name: Publish package to PyPI
+          name: python-package-distributions
+          path: dist/
+      - name: Publish distribution 📦 to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
-          repository-url: https://upload.pypi.org/legacy/
