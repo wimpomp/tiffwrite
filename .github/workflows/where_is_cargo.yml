@@ -1,0 +1,25 @@
+name: Where_is_cargo
+
+on: [push, pull_request]
+
+jobs:
+  where_is_cargo:
+    name: Where is cargo
+    needs: [ wheels_pytest ]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+
+      - name: Check path
+        if: runner.os != 'Windows'
+        run: echo $PATH
+
+      - name: Set path
+        if: runner.os != 'Windows'
+        run: export PATH="$HOME/.cargo/bin:$PATH"
+
+      - name: Check path
+        if: runner.os != 'Windows'
+        run: echo $PATH
