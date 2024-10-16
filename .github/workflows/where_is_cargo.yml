@@ -5,7 +5,6 @@ on: [push, pull_request]
 jobs:
   where_is_cargo:
     name: Where is cargo
-    needs: [ wheels_pytest ]
     runs-on: ubuntu-latest
 
     steps:
