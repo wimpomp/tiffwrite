@@ -8,3 +8,4 @@
 /Cargo.lock
 /foo.tif
 *.so
+__pycache__

@@ -6,6 +6,11 @@ build-backend = "maturin"
 name = "tiffwrite"
 dynamic = ["version"]
 authors = [{ name = "Wim Pomp", email = "w.pomp@nki.nl" }]
+license = "GPLv3"
+description = "Write BioFormats/ImageJ compatible tiffs with zstd compression in parallel."
+homepage = "https://github.com/wimpomp/tiffwrite"
+repository = "https://github.com/wimpomp/tiffwrite"
+readme = "README.md"
 requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",
