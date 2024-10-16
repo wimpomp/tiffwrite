@@ -13,11 +13,7 @@ jobs:
 
       - name: Check path
         if: runner.os != 'Windows'
-        run: echo $PATH
-
-      - name: Set path
-        if: runner.os != 'Windows'
-        run: export PATH="$HOME/.cargo/bin:$PATH"
+        run: which cargo
 
       - name: Check path
         if: runner.os != 'Windows'
