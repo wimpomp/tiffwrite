@@ -1,6 +1,6 @@
 name: Wheels
 
-on: workflow_call
+on: [push, pull_request]
 
 jobs:
   wheels_pytest:
