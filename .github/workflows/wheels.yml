@@ -1,15 +1,15 @@
 name: Wheels
 
-on: [push, pull_request]
+on: [push, pull_request, workflow_call]
 
 permissions:
   contents: read
 
 jobs:
-  #  wheels_pytest:
-  #    uses: ./.github/workflows/pytest.yml
+  wheels_pytest:
+    uses: ./.github/workflows/pytest.yml
   linux:
-    #    needs: [ wheels_pytest ]
+    needs: [ wheels_pytest ]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -45,7 +45,7 @@ jobs:
           path: dist
 
   windows:
-    #    needs: [ wheels_pytest ]
+    needs: [ wheels_pytest ]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -73,7 +73,7 @@ jobs:
           path: dist
 
   macos:
-    #    needs: [ wheels_pytest ]
+    needs: [ wheels_pytest ]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
