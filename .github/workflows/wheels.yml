@@ -1,0 +1,42 @@
+name: Wheels
+
+on: workflow_call
+
+jobs:
+  wheels_pytest:
+    uses: ./.github/workflows/pytest.yml
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    needs: [ wheels_pytest ]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-13, macos-latest ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.21.2
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tiffwrite-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
+
+  build_sdist:
+    name: Build source distribution
+    needs: [ wheels_pytest ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sdist
+        run: |
+          pip install build
+          python -m build --sdist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tiffwrite-sdist
+          path: dist/*.tar.gz

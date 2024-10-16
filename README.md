@@ -1,23 +1,26 @@
-[![mypy](https://github.com/wimpomp/tiffwrite/actions/workflows/mypy.yml/badge.svg)](https://github.com/wimpomp/tiffwrite/actions/workflows/mypy.yml)
 [![pytest](https://github.com/wimpomp/tiffwrite/actions/workflows/pytest.yml/badge.svg)](https://github.com/wimpomp/tiffwrite/actions/workflows/pytest.yml)
 
 # Tiffwrite
-Exploiting [tifffile](https://pypi.org/project/tifffile/) in parallel to write BioFormats/ImageJ compatible tiffs with
-good compression.
+Write BioFormats/ImageJ compatible tiffs with zstd compression in parallel using Rust.
 
 ## Features
 - Writes bigtiff files that open in ImageJ as hyperstack with correct dimensions.
 - Parallel compression.
 - Write individual frames in random order.
 - Compresses even more by referencing tag or image data which otherwise would have been saved several times.
-For example empty frames, or a long string tag on every frame.
+For example empty frames, or a long string tag on every frame. Editing tiffs becomes mostly impossible, but compression
+makes that very hard anyway.
 - Enables memory efficient scripts by saving frames whenever they're ready to be saved, not waiting for the whole stack.
-- Colormaps, extra tags, globally or frame dependent.
+- Colormaps
+- Extra tags, globally or frame dependent.
 
 ## Installation
     pip install tiffwrite
 or
 
+- install [rust](https://rustup.rs/)     
+
+    
     pip install tiffwrite@git+https://github.com/wimpomp/tiffwrite
 
 # Usage
@@ -67,11 +70,10 @@ or
     from tiffwrite import IJTiffFile
     import numpy as np
 
-    shape = (3, 5, 10)  # channels, z, time
-    with IJTiffFile('file.tif', shape, pxsize=0.09707) as tif:
-        for c in range(shape[0]):
-            for z in range(shape[1]):
-                for t in range(shape[2]):
+    with IJTiffFile('file.tif', pxsize=0.09707) as tif:
+        for c in range(3):
+            for z in range(5):
+                for t in range(10):
                     tif.save(np.random.randint(0, 10, (32, 32)), c, z, t)
 
 ## Saving multiple tiffs simultaneously
@@ -79,7 +81,7 @@ or
     import numpy as np
     
     shape = (3, 5, 10)  # channels, z, time
-    with IJTiffFile('fileA.tif', shape) as tif_a, IJTiffFile('fileB.tif', shape) as tif_b:
+    with IJTiffFile('fileA.tif') as tif_a, IJTiffFile('fileB.tif') as tif_b:
         for c in range(shape[0]):
             for z in range(shape[1]):
                 for t in range(shape[2]):

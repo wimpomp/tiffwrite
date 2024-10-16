@@ -4,3 +4,7 @@
 /tiffwrite.egg-info/
 /.pytest_cache/
 /venv/
+/target/
+/Cargo.lock
+/foo.tif
+*.so

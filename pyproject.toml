@@ -1,39 +1,26 @@
-[tool.poetry]
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
 name = "tiffwrite"
-version = "2024.10.1"
-description = "Parallel tiff writer compatible with ImageJ."
-authors = ["Wim Pomp, Lenstra lab NKI <w.pomp@nki.nl>"]
-license = "GPL-3.0-or-later"
-readme = "README.md"
-packages = [{include = "tiffwrite"}]
-repository = "https://github.com/wimpomp/tiffwrite"
+dynamic = ["version"]
+authors = [{ name = "Wim Pomp", email = "w.pomp@nki.nl" }]
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = ["colorcet", "matplotlib", "numpy", "tqdm"]
 
-[tool.poetry.dependencies]
-python = "^3.10"
-tifffile = "*"
-imagecodecs = "*"
-numpy = "*"
-tqdm = "*"
-colorcet = "*"
-matplotlib = "*"
-parfor = ">=2024.9.2"
-pytest = { version = "*", optional = true }
-mypy = { version = "*", optional = true }
+[project.optional-dependencies]
+test = ["pytest", "tifffile", "imagecodecs"]
 
-[tool.poetry.extras]
-test = ["pytest", "mypy"]
-
-[tool.pytest.ini_options]
-filterwarnings = ["ignore:::(?!tiffwrite)"]
+[tool.maturin]
+python-source = "py"
+features = ["pyo3/extension-module", "python"]
+module-name = "tiffwrite.tiffwrite_rs"
 
 [tool.isort]
 line_length = 119
-
-[tool.mypy]
-disable_error_code = ["import-untyped", "return"]
-implicit_optional = true
-exclude = ["build"]
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
