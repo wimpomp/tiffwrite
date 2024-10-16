@@ -2,45 +2,130 @@ name: Wheels
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
-#  wheels_pytest:
-#    uses: ./.github/workflows/pytest.yml
-  build_wheels:
-    name: Build wheels on ${{ matrix.os }}
-#    needs: [ wheels_pytest ]
-    runs-on: ${{ matrix.os }}
+  #  wheels_pytest:
+  #    uses: ./.github/workflows/pytest.yml
+  linux:
+    #    needs: [ wheels_pytest ]
+    runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
-        os: [ ubuntu-latest, windows-latest, macos-13, macos-latest ]
-
+        platform:
+          - runner: ubuntu-latest
+            target: x86_64
+          - runner: ubuntu-latest
+            target: x86
+          - runner: ubuntu-latest
+            target: aarch64
+          - runner: ubuntu-latest
+            target: armv7
+          - runner: ubuntu-latest
+            target: s390x
+          - runner: ubuntu-latest
+            target: ppc64le
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-
-      - name: Install cibuildwheel
-        run: pip install cibuildwheel==2.21.3
-
-      - name: Build wheels
-        run: cibuildwheel --output-dir wheelhouse
-
-      - uses: actions/upload-artifact@v4
         with:
-          name: tiffwrite-wheels-${{ matrix.os }}-${{ strategy.job-index }}
-          path: ./wheelhouse/*.whl
+          python-version: '3.10'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          sccache: 'true'
+          manylinux: auto
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.platform.target }}
+          path: dist
 
-  build_sdist:
-    name: Build source distribution
-#    needs: [ wheels_pytest ]
+  windows:
+    #    needs: [ wheels_pytest ]
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: windows-latest
+            target: x64
+          - runner: windows-latest
+            target: x86
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          architecture: ${{ matrix.platform.target }}
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          sccache: 'true'
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.platform.target }}
+          path: dist
+
+  macos:
+    #    needs: [ wheels_pytest ]
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: macos-latest
+            target: x86_64
+          - runner: macos-14
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          sccache: 'true'
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.platform.target }}
+          path: dist
+
+  sdist:
+    #    needs: [ wheels_pytest ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Build sdist
-        run: |
-          pip install build
-          build --sdist
-
-      - uses: actions/upload-artifact@v4
+        uses: PyO3/maturin-action@v1
         with:
-          name: tiffwrite-sdist
-          path: dist/*.tar.gz
+          command: sdist
+          args: --out dist
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+#  release:
+#    name: Release
+#    runs-on: ubuntu-latest
+#    if: "startsWith(github.ref, 'refs/tags/')"
+#    needs: [linux, windows, macos, sdist]
+#    steps:
+#      - uses: actions/download-artifact@v4
+#      - name: Publish to PyPI
+#        uses: PyO3/maturin-action@v1
+#        env:
+#          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+#        with:
+#          command: upload
+#          args: --non-interactive --skip-existing wheels-*/*
