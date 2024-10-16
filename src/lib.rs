@@ -3,7 +3,7 @@ mod py;
 
 use anyhow::Result;
 use chrono::Utc;
-use ndarray::{s, Array2};
+use ndarray::{s, Array2, ArrayView2};
 use num::{traits::ToBytes, Complex, FromPrimitive, Rational32, Zero};
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -632,17 +632,18 @@ impl IJTiffFile {
         }
     }
 
-    pub fn save<T>(&mut self, frame: Array2<T>, c: usize, z: usize, t: usize) -> Result<()>
+    pub fn save<T>(&mut self, frame: ArrayView2<T>, c: usize, z: usize, t: usize) -> Result<()>
     where
-        T: Bytes + Clone + Send + Sync + Zero + 'static,
+        T: Bytes + Clone + Send + Zero + 'static,
     {
         self.compress_frame(frame.reversed_axes(), c, z, t)?;
         Ok(())
     }
 
-    fn compress_frame<T>(&mut self, frame: Array2<T>, c: usize, z: usize, t: usize) -> Result<()>
+    fn compress_frame<T>(&mut self, frame: ArrayView2<T>,
+                         c: usize, z: usize, t: usize) -> Result<()>
     where
-        T: Bytes + Clone + Zero + Send + 'static,
+        T: Bytes + Clone + Send + Zero + 'static,
     {
         fn compress<T>(frame: Array2<T>, compression_level: i32) -> CompressedFrame
         where
@@ -657,7 +658,7 @@ impl IJTiffFile {
                 )
                 .max(16)
                 .min(1024);
-            let tiles = IJTiffFile::tile(frame.reversed_axes(), tile_size);
+            let tiles = IJTiffFile::tile(frame.view().reversed_axes(), tile_size);
             let byte_tiles: Vec<Vec<u8>> = tiles
                 .into_iter()
                 .map(|tile| tile.map(|x| x.bytes()).into_iter().flatten().collect())
@@ -690,6 +691,7 @@ impl IJTiffFile {
             sleep(Duration::from_millis(100));
         }
         let compression_level = self.compression_level;
+        let frame = frame.to_owned();
         self.threads.insert(
             (c, z, t),
             thread::spawn(move || compress(frame, compression_level)),
@@ -729,7 +731,7 @@ impl IJTiffFile {
         Ok(())
     }
 
-    fn tile<T: Clone + Zero>(frame: Array2<T>, size: usize) -> Vec<Array2<T>> {
+    fn tile<T: Clone + Zero>(frame: ArrayView2<T>, size: usize) -> Vec<Array2<T>> {
         let shape = frame.shape();
         let (n, m) = (shape[0] / size, shape[1] / size);
         let mut tiles = Vec::new();

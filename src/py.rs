@@ -332,7 +332,7 @@ macro_rules! impl_save {
                 z: usize,
             ) -> PyResult<()> {
                 if let Some(ijtifffile) = self.ijtifffile.as_mut() {
-                    ijtifffile.save(frame.to_owned_array(), c, t, z)?;
+                    ijtifffile.save(frame.as_array(), c, t, z)?;
                 }
                 Ok(())
             }
