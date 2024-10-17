@@ -3,7 +3,7 @@ mod py;
 
 use anyhow::Result;
 use chrono::Utc;
-use ndarray::{s, Array2, ArrayView2};
+use ndarray::{s, ArcArray2, Array2, ArrayView2, AsArray, Ix2};
 use num::{traits::ToBytes, Complex, FromPrimitive, Rational32, Zero};
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -148,7 +148,8 @@ impl Tag {
     pub fn long(code: u16, value: &Vec<u32>) -> Self {
         Tag::new(
             code,
-            value.into_iter()
+            value
+                .into_iter()
                 .map(|x| x.to_le_bytes())
                 .flatten()
                 .collect(),
@@ -253,7 +254,11 @@ impl Tag {
     pub fn ifd(code: u16, value: &Vec<u32>) -> Self {
         Tag::new(
             code,
-            value.into_iter().map(|x| x.to_le_bytes()).flatten().collect(),
+            value
+                .into_iter()
+                .map(|x| x.to_le_bytes())
+                .flatten()
+                .collect(),
             13,
         )
     }
@@ -508,6 +513,8 @@ impl Drop for IJTiffFile {
 }
 
 impl IJTiffFile {
+
+    /// create new tifffile from path string
     pub fn new(path: &str) -> Result<Self> {
         let mut file = OpenOptions::new()
             .create(true)
@@ -535,10 +542,12 @@ impl IJTiffFile {
         })
     }
 
+    /// set zstd compression level: -7 ..= 22
     pub fn set_compression_level(&mut self, compression_level: i32) {
         self.compression_level = compression_level.max(-7).min(22);
     }
 
+    /// to be saved in description tag (270)
     pub fn description(&self, c_size: usize, z_size: usize, t_size: usize) -> String {
         let mut desc: String = String::from("ImageJ=1.11a");
         if let Colors::None = self.colors {
@@ -632,20 +641,12 @@ impl IJTiffFile {
         }
     }
 
-    pub fn save<T>(&mut self, frame: ArrayView2<T>, c: usize, z: usize, t: usize) -> Result<()>
+    pub fn save<'a, A, T>(&mut self, frame: A, c: usize, z: usize, t: usize) -> Result<()>
     where
-        T: Bytes + Clone + Send + Zero + 'static,
+        A: AsArray<'a, T, Ix2>,
+        T: Bytes + Clone + Send + Sync + Zero + 'static,
     {
-        self.compress_frame(frame.reversed_axes(), c, z, t)?;
-        Ok(())
-    }
-
-    fn compress_frame<T>(&mut self, frame: ArrayView2<T>,
-                         c: usize, z: usize, t: usize) -> Result<()>
-    where
-        T: Bytes + Clone + Send + Zero + 'static,
-    {
-        fn compress<T>(frame: Array2<T>, compression_level: i32) -> CompressedFrame
+        fn compress<T>(frame: ArcArray2<T>, compression_level: i32) -> CompressedFrame
         where
             T: Bytes + Clone + Zero,
         {
@@ -658,7 +659,7 @@ impl IJTiffFile {
                 )
                 .max(16)
                 .min(1024);
-            let tiles = IJTiffFile::tile(frame.view().reversed_axes(), tile_size);
+            let tiles = IJTiffFile::tile(frame.view(), tile_size);
             let byte_tiles: Vec<Vec<u8>> = tiles
                 .into_iter()
                 .map(|tile| tile.map(|x| x.bytes()).into_iter().flatten().collect())
@@ -691,7 +692,7 @@ impl IJTiffFile {
             sleep(Duration::from_millis(100));
         }
         let compression_level = self.compression_level;
-        let frame = frame.to_owned();
+        let frame = frame.into().to_shared();
         self.threads.insert(
             (c, z, t),
             thread::spawn(move || compress(frame, compression_level)),
@@ -906,12 +907,13 @@ impl IJTiffFile {
                     let (c, z, t) = self.get_czt(*frame_number, *channel, c_size, z_size);
                     println!("c: {c}, z: {z}, t: {t}")
                 }
-                println!("Either you forgot them, \
-                         or an error occurred and the tif file was closed prematurely.")
+                println!(
+                    "Either you forgot them, \
+                         or an error occurred and the tif file was closed prematurely."
+                )
             }
         }
-        self.file
-            .seek(SeekFrom::Start(where_to_write_next_ifd_offset))?;
+        self.file.seek(SeekFrom::Start(where_to_write_next_ifd_offset))?;
         self.file.write(&0u64.to_le_bytes())?;
         Ok(())
     }

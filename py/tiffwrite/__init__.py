@@ -36,26 +36,26 @@ class TiffWriteWarning(UserWarning):
 class IJTiffFile(rs.IJTiffFile):
     """ Writes a tiff file in a format that the BioFormats reader in Fiji understands.
         Zstd compression is done in parallel using Rust.
-        file:           filename of the new tiff file
-        shape:          not used anymore
+        path:           path to the new tiff file
         dtype:          datatype to use when saving to tiff
         colors:         a tuple with a color per channel, chosen from matplotlib.colors, html colors are also possible
         colormap:       name of a colormap from colorcet
         pxsize:         pixel size in um
         deltaz:         z slice interval in um
         timeinterval:   time between frames in seconds
+        compression:    zstd compression level: -7 to 22.
+        comment:        comment to be saved in tif
         extratags:      other tags to be saved, example: (Tag.ascii(315, 'John Doe'), Tag.bytes(4567, [400, 500])
                             or (Tag.ascii(33432, 'Made by me'),).
     """
     def __new__(cls, path: str | Path, *args, **kwargs) -> IJTiffFile:
         return super().__new__(cls, str(path))
 
-    def __init__(self, path: str | Path, shape: tuple[int, int, int] = None, dtype: DTypeLike = 'uint16',
+    def __init__(self, path: str | Path, *, dtype: DTypeLike = 'uint16',
                  colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,
                  deltaz: float = None, timeinterval: float = None, compression: int = None, comment: str = None,
                  extratags: Sequence[Tag] = None) -> None:
         self.path = Path(path)
-        self.shape = shape
         self.dtype = np.dtype(dtype)
         if compression is not None:
             if isinstance(compression, Sequence):
@@ -79,9 +79,6 @@ class IJTiffFile(rs.IJTiffFile):
         if self.dtype.itemsize == 1 and colors is not None:
             warn('Fiji will not interpret colors saved in an (u)int8 tif, save as (u)int16 instead.',
                  TiffWriteWarning, stacklevel=2)
-        if shape is not None:
-            warn('Providing shape is not needed anymore, the argument will be removed in the future.',
-                 DeprecationWarning, stacklevel=2)
         if colors is not None and colormap is not None:
             warn('Cannot have colors and colormap simultaneously.', TiffWriteWarning, stacklevel=2)
 
@@ -176,7 +173,7 @@ def tiffwrite(file: str | Path, data: np.ndarray, axes: str = 'TZCXY', dtype: DT
 
 try:
     from parfor import ParPool, Task
-    from abc import abstractmethod, ABCMeta
+    from abc import ABCMeta, abstractmethod
     from functools import wraps
 
 

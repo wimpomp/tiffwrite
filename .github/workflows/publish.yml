@@ -1,4 +1,4 @@
-name: Wheels
+name: Publish
 
 on: [push, pull_request, workflow_call]
 
@@ -6,10 +6,10 @@ permissions:
   contents: read
 
 jobs:
-  wheels_pytest:
+  publish_pytest:
     uses: ./.github/workflows/pytest.yml
   linux:
-    needs: [ wheels_pytest ]
+    needs: [ publish_pytest ]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -45,7 +45,7 @@ jobs:
           path: dist
 
   windows:
-    needs: [ wheels_pytest ]
+    needs: [ publish_pytest ]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -73,7 +73,7 @@ jobs:
           path: dist
 
   macos:
-    needs: [ wheels_pytest ]
+    needs: [ publish_pytest ]
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
@@ -100,7 +100,7 @@ jobs:
           path: dist
 
   sdist:
-    needs: [ wheels_pytest ]
+    needs: [ publish_pytest ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -128,3 +128,51 @@ jobs:
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
+
+  crates_io_publish:
+    name: Publish (crates.io)
+    needs: [ publish_pytest ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo-release Cache
+        id: cargo_release_cache
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/bin/cargo-release
+          key: ${{ runner.os }}-cargo-release
+
+      - run: cargo install cargo-release
+        if: steps.cargo_release_cache.outputs.cache-hit != 'true'
+
+      - name: cargo login
+        run: cargo login ${{ secrets.CRATES_IO_API_TOKEN }}
+
+      # allow-branch HEAD is because GitHub actions switches
+      # to the tag while building, which is a detached head
+
+      # Publishing is currently messy, because:
+      #
+      # * `peace_rt_model_core` exports `NativeError` or `WebError` depending on the target.
+      # * `peace_rt_model_web` fails to build when publishing the workspace for a native target.
+      # * `peace_rt_model_web` still needs its dependencies to be published before it can be
+      #    published.
+      # * `peace_rt_model_hack` needs `peace_rt_model_web` to be published before it can be
+      #    published.
+      #
+      # We *could* pass through `--no-verify` so `cargo` doesn't build the crate before publishing,
+      # which is reasonable, since this job only runs after the Linux, Windows, and WASM builds
+      # have passed.
+      - name: "cargo release publish"
+        run: |-
+          cargo release \
+            publish \
+            --workspace \
+            --all-features \
+            --allow-branch HEAD \
+            --no-confirm \
+            --no-verify \
+            --execute

@@ -18,6 +18,6 @@ fn main() -> Result<()> {
     arr.slice_mut(s![64.., ..64]).fill(1);
     arr.slice_mut(s![..64, 64..]).fill(2);
     arr.slice_mut(s![64.., 64..]).fill(3);
-    f.save(arr.view(), 1, 0, 0)?;
+    f.save(&arr, 1, 0, 0)?;
     Ok(())
 }
