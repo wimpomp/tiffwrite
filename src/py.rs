@@ -171,9 +171,10 @@ impl PyIJTiffFile {
         })
     }
 
+    /// set zstd compression level: -7 ..= 22
     fn set_compression_level(&mut self, compression_level: i32) {
         if let Some(ref mut ijtifffile) = self.ijtifffile {
-            ijtifffile.set_compression_level(compression_level);
+            ijtifffile.compression_level = compression_level.max(-7).min(22);
         }
     }
 

@@ -3,13 +3,13 @@ mod py;
 
 use anyhow::Result;
 use chrono::Utc;
-use ndarray::{s, ArcArray2, Array2, ArrayView2, AsArray, Ix2};
-use num::{traits::ToBytes, Complex, FromPrimitive, Rational32, Zero};
+use ndarray::{s, ArcArray2, AsArray, Ix2};
+use num::{traits::ToBytes, Complex, FromPrimitive, Rational32};
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::{copy, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::time::Duration;
 use std::{cmp::Ordering, collections::HashMap};
 use std::{
@@ -22,26 +22,6 @@ const TAG_SIZE: usize = 20;
 const OFFSET_SIZE: usize = 8;
 const OFFSET: u64 = 16;
 const COMPRESSION: u16 = 50000;
-
-fn encode_all(source: Vec<u8>, level: i32) -> Result<Vec<u8>> {
-    let mut result = Vec::<u8>::new();
-    copy_encode(&*source, &mut result, level, source.len() as u64)?;
-    Ok(result)
-}
-
-/// copy_encode from zstd crate, but let it include the content size in the zstd block header
-fn copy_encode<R, W>(mut source: R, destination: W, level: i32, length: u64) -> Result<()>
-where
-    R: Read,
-    W: Write,
-{
-    let mut encoder = Encoder::new(destination, level)?;
-    encoder.include_contentsize(true)?;
-    encoder.set_pledged_src_size(Some(length))?;
-    copy(&mut source, &mut encoder)?;
-    encoder.finish()?;
-    Ok(())
-}
 
 #[derive(Clone, Debug)]
 struct IFD {
@@ -399,9 +379,140 @@ struct CompressedFrame {
     bytes: Vec<Vec<u8>>,
     image_width: u32,
     image_length: u32,
-    tile_size: usize,
+    tile_width: usize,
+    tile_length: usize,
     bits_per_sample: u16,
     sample_format: u16,
+}
+
+impl CompressedFrame {
+    fn new<T>(frame: ArcArray2<T>, compression_level: i32) -> CompressedFrame
+    where
+        T: Bytes + Send + Sync,
+    {
+        let shape = frame.shape();
+        let tile_size = 2usize
+            .pow(((shape[0] as f64 * shape[1] as f64 / 2f64).log2() / 2f64).round() as u32)
+            .max(16)
+            .min(1024);
+
+        let tile_width = tile_size;
+        let tile_length = tile_size;
+        let n = shape[0] / tile_width;
+        let m = shape[1] / tile_length;
+        let mut slices = Vec::new();
+        for i in 0..n {
+            for j in 0..m {
+                slices.push((
+                    i * tile_width,
+                    (i + 1) * tile_width,
+                    j * tile_length,
+                    (j + 1) * tile_length,
+                ));
+            }
+            if shape[1] % tile_length != 0 {
+                slices.push((
+                    i * tile_width,
+                    (i + 1) * tile_width,
+                    m * tile_length,
+                    shape[1],
+                ));
+            }
+        }
+        if shape[0] % tile_width != 0 {
+            for j in 0..m {
+                slices.push((
+                    n * tile_width,
+                    shape[0],
+                    j * tile_length,
+                    (j + 1) * tile_length,
+                ));
+            }
+            if shape[1] % tile_length != 0 {
+                slices.push((n * tile_width, shape[0], m * tile_length, shape[1]));
+            }
+        }
+
+        let mut a = Vec::new();
+        for i in 0..24 {
+            a.push(i);
+        }
+        let bytes: Vec<_> = if slices.len() > 4 {
+            slices
+                .into_par_iter()
+                .map(|slice| {
+                    CompressedFrame::compress_tile(
+                        frame.clone(),
+                        slice,
+                        tile_size,
+                        tile_size,
+                        compression_level,
+                    )
+                    .unwrap()
+                })
+                .collect()
+        } else {
+            slices
+                .into_iter()
+                .map(|slice| {
+                    CompressedFrame::compress_tile(
+                        frame.clone(),
+                        slice,
+                        tile_size,
+                        tile_size,
+                        compression_level,
+                    )
+                    .unwrap()
+                })
+                .collect()
+        };
+
+        CompressedFrame {
+            bytes,
+            image_width: shape[0] as u32,
+            image_length: shape[1] as u32,
+            tile_width,
+            tile_length,
+            bits_per_sample: T::BITS_PER_SAMPLE,
+            sample_format: T::SAMPLE_FORMAT,
+        }
+    }
+
+    fn compress_tile<T>(
+        frame: ArcArray2<T>,
+        slice: (usize, usize, usize, usize),
+        tile_width: usize,
+        tile_length: usize,
+        compression_level: i32,
+    ) -> Result<Vec<u8>>
+    where
+        T: Bytes,
+    {
+        let mut dest = Vec::new();
+        let mut encoder = Encoder::new(&mut dest, compression_level)?;
+        let bytes_per_sample = (T::BITS_PER_SAMPLE / 8) as usize;
+        encoder.include_contentsize(true)?;
+        encoder.set_pledged_src_size(Some((bytes_per_sample * tile_width * tile_length) as u64))?;
+        let shape = (slice.1 - slice.0, slice.3 - slice.2);
+        for i in 0..shape.0 {
+            encoder.write(
+                &frame
+                    .slice(s![slice.0..slice.1, slice.2..slice.3])
+                    .slice(s![i, ..])
+                    .map(|x| x.bytes())
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>(),
+            )?;
+            encoder.write(&vec![0u8; bytes_per_sample * (tile_width - shape.1)])?;
+        }
+        encoder.write(&vec![
+            0u8;
+            bytes_per_sample * tile_width * (tile_length - shape.0)
+        ])?;
+        encoder.finish()?;
+        Ok(dest)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -513,7 +624,6 @@ impl Drop for IJTiffFile {
 }
 
 impl IJTiffFile {
-
     /// create new tifffile from path string
     pub fn new(path: &str) -> Result<Self> {
         let mut file = OpenOptions::new()
@@ -540,11 +650,6 @@ impl IJTiffFile {
             time_interval: None,
             extra_tags: HashMap::new(),
         })
-    }
-
-    /// set zstd compression level: -7 ..= 22
-    pub fn set_compression_level(&mut self, compression_level: i32) {
-        self.compression_level = compression_level.max(-7).min(22);
     }
 
     /// to be saved in description tag (270)
@@ -644,46 +749,8 @@ impl IJTiffFile {
     pub fn save<'a, A, T>(&mut self, frame: A, c: usize, z: usize, t: usize) -> Result<()>
     where
         A: AsArray<'a, T, Ix2>,
-        T: Bytes + Clone + Send + Sync + Zero + 'static,
+        T: Bytes + Clone + Send + Sync + 'static,
     {
-        fn compress<T>(frame: ArcArray2<T>, compression_level: i32) -> CompressedFrame
-        where
-            T: Bytes + Clone + Zero,
-        {
-            let image_width = frame.shape()[0] as u32;
-            let image_length = frame.shape()[1] as u32;
-            let tile_size = 2usize
-                .pow(
-                    ((image_width as f64 * image_length as f64 / 2f64).log2() / 2f64).round()
-                        as u32,
-                )
-                .max(16)
-                .min(1024);
-            let tiles = IJTiffFile::tile(frame.view(), tile_size);
-            let byte_tiles: Vec<Vec<u8>> = tiles
-                .into_iter()
-                .map(|tile| tile.map(|x| x.bytes()).into_iter().flatten().collect())
-                .collect();
-            let bytes = if byte_tiles.len() > 4 {
-                byte_tiles
-                    .into_par_iter()
-                    .map(|x| encode_all(x, compression_level).unwrap())
-                    .collect::<Vec<_>>()
-            } else {
-                byte_tiles
-                    .into_iter()
-                    .map(|x| encode_all(x, compression_level).unwrap())
-                    .collect::<Vec<_>>()
-            };
-            CompressedFrame {
-                bytes,
-                image_width,
-                image_length,
-                tile_size,
-                bits_per_sample: T::BITS_PER_SAMPLE,
-                sample_format: T::SAMPLE_FORMAT,
-            }
-        }
         loop {
             self.collect_threads(false)?;
             if self.threads.len() < 48 {
@@ -695,7 +762,7 @@ impl IJTiffFile {
         let frame = frame.into().to_shared();
         self.threads.insert(
             (c, z, t),
-            thread::spawn(move || compress(frame, compression_level)),
+            thread::spawn(move || CompressedFrame::new(frame, compression_level)),
         );
         Ok(())
     }
@@ -725,47 +792,11 @@ impl IJTiffFile {
             frame.image_length,
             frame.bits_per_sample,
             frame.sample_format,
-            frame.tile_size as u16,
-            frame.tile_size as u16,
+            frame.tile_width as u16,
+            frame.tile_length as u16,
         );
         self.frames.insert((c, z, t), frame);
         Ok(())
-    }
-
-    fn tile<T: Clone + Zero>(frame: ArrayView2<T>, size: usize) -> Vec<Array2<T>> {
-        let shape = frame.shape();
-        let (n, m) = (shape[0] / size, shape[1] / size);
-        let mut tiles = Vec::new();
-        for i in 0..n {
-            for j in 0..m {
-                tiles.push(
-                    frame
-                        .slice(s![i * size..(i + 1) * size, j * size..(j + 1) * size])
-                        .to_owned(),
-                );
-            }
-            if shape[1] % size != 0 {
-                let mut tile = Array2::<T>::zeros((size, size));
-                tile.slice_mut(s![.., ..shape[1] - m * size])
-                    .assign(&frame.slice(s![i * size..(i + 1) * size, m * size..]));
-                tiles.push(tile);
-            }
-        }
-        if shape[0] % size != 0 {
-            for j in 0..m {
-                let mut tile = Array2::<T>::zeros((size, size));
-                tile.slice_mut(s![..shape[0] - n * size, ..])
-                    .assign(&frame.slice(s![n * size.., j * size..(j + 1) * size]));
-                tiles.push(tile);
-            }
-            if shape[1] % size != 0 {
-                let mut tile = Array2::<T>::zeros((size, size));
-                tile.slice_mut(s![..shape[0] - n * size, ..shape[1] - m * size])
-                    .assign(&frame.slice(s![n * size.., m * size..]));
-                tiles.push(tile);
-            }
-        }
-        tiles
     }
 
     fn get_colormap(&self, colormap: &Vec<Vec<u8>>, bits_per_sample: u16) -> Vec<u16> {
@@ -913,7 +944,8 @@ impl IJTiffFile {
                 )
             }
         }
-        self.file.seek(SeekFrom::Start(where_to_write_next_ifd_offset))?;
+        self.file
+            .seek(SeekFrom::Start(where_to_write_next_ifd_offset))?;
         self.file.write(&0u64.to_le_bytes())?;
         Ok(())
     }
