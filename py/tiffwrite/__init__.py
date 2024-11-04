@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from importlib.metadata import version
 from itertools import product
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -16,6 +17,10 @@ from . import tiffwrite_rs as rs  # noqa
 
 __all__ = ['IJTiffFile', 'IJTiffParallel', 'FrameInfo', 'Tag', 'tiffwrite']
 
+try:
+    __version__ = version(Path(__file__).parent.name)
+except Exception:  # noqa
+    __version__ = "unknown"
 
 Tag = rs.Tag
 FrameInfo = tuple[ArrayLike, int, int, int]
@@ -172,9 +177,10 @@ def tiffwrite(file: str | Path, data: np.ndarray, axes: str = 'TZCXY', dtype: DT
 
 
 try:
-    from parfor import ParPool, Task
     from abc import ABCMeta, abstractmethod
     from functools import wraps
+
+    from parfor import ParPool, Task
 
 
     class Pool(ParPool):
@@ -225,4 +231,4 @@ try:
             self.pool.close()
 
 except ImportError:
-    IJTiffPool = None
+    IJTiffParallel = None
