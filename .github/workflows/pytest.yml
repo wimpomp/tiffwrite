@@ -1,6 +1,6 @@
 name: PyTest
 
-on: workflow_call
+on: [push, pull_request, workflow_call]
 
 jobs:
   pytest:

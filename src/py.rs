@@ -11,6 +11,7 @@ struct PyTag {
     tag: Tag,
 }
 
+/// Tiff tag, use one of the constructors to get a tag of a specific type
 #[pymethods]
 impl PyTag {
     #[staticmethod]
@@ -150,6 +151,7 @@ impl PyTag {
         }
     }
 
+    /// get the number of values in the tag
     fn count(&self) -> u64 {
         self.tag.count()
     }

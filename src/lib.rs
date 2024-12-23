@@ -23,12 +23,14 @@ const OFFSET_SIZE: usize = 8;
 const OFFSET: u64 = 16;
 const COMPRESSION: u16 = 50000;
 
+/// Image File Directory
 #[derive(Clone, Debug)]
 struct IFD {
     tags: HashSet<Tag>,
 }
 
 impl IFD {
+    /// new IFD with empty set of tags
     pub fn new() -> Self {
         IFD {
             tags: HashSet::new(),
@@ -61,6 +63,7 @@ impl IFD {
     }
 }
 
+/// Tiff tag, use one of the constructors to get a tag of a specific type
 #[derive(Clone, Debug, Eq)]
 pub struct Tag {
     code: u16,
@@ -317,6 +320,7 @@ impl Tag {
         }
     }
 
+    /// get the number of values in the tag
     pub fn count(&self) -> u64 {
         let c = match self.ttype {
             1 => self.bytes.len(),      // BYTE
@@ -478,6 +482,16 @@ impl CompressedFrame {
         }
     }
 
+    /// loop until all bytes are encoded
+    fn write(encoder: &mut Encoder<&mut Vec<u8>>, buf: &[u8]) -> Result<()> {
+        let b = buf.len();
+        let mut w = 0;
+        while w < b {
+            w += encoder.write(&buf[w..])?;
+        }
+        Ok(())
+    }
+
     fn compress_tile<T>(
         frame: ArcArray2<T>,
         slice: (usize, usize, usize, usize),
@@ -495,7 +509,8 @@ impl CompressedFrame {
         encoder.set_pledged_src_size(Some((bytes_per_sample * tile_width * tile_length) as u64))?;
         let shape = (slice.1 - slice.0, slice.3 - slice.2);
         for i in 0..shape.0 {
-            encoder.write(
+            CompressedFrame::write(
+                &mut encoder,
                 &frame
                     .slice(s![slice.0..slice.1, slice.2..slice.3])
                     .slice(s![i, ..])
@@ -504,12 +519,15 @@ impl CompressedFrame {
                     .flatten()
                     .collect::<Vec<_>>(),
             )?;
-            encoder.write(&vec![0u8; bytes_per_sample * (tile_width - shape.1)])?;
+            CompressedFrame::write(
+                &mut encoder,
+                &vec![0u8; bytes_per_sample * (tile_width - shape.1)],
+            )?;
         }
-        encoder.write(&vec![
-            0u8;
-            bytes_per_sample * tile_width * (tile_length - shape.0)
-        ])?;
+        CompressedFrame::write(
+            &mut encoder,
+            &vec![0u8; bytes_per_sample * tile_width * (tile_length - shape.0)],
+        )?;
         encoder.finish()?;
         Ok(dest)
     }
@@ -551,6 +569,7 @@ impl Frame {
     }
 }
 
+/// trait to convert numbers to bytes
 pub trait Bytes {
     const BITS_PER_SAMPLE: u16;
     const SAMPLE_FORMAT: u16;
@@ -593,6 +612,7 @@ bytes_impl!(isize, 32, 2);
 bytes_impl!(f32, 32, 3);
 bytes_impl!(f64, 64, 3);
 
+/// what colormap to save in the tiff; None, Colors: gradient from black to color, or full Colormap
 #[derive(Clone, Debug)]
 pub enum Colors {
     None,
@@ -600,18 +620,24 @@ pub enum Colors {
     Colormap(Vec<Vec<u8>>),
 }
 
+/// save 2d arrays in a tif file compatible with Fiji/ImageJ
 #[derive(Debug)]
 pub struct IJTiffFile {
     file: File,
     frames: HashMap<(usize, usize, usize), Frame>,
     hashes: HashMap<u64, u64>,
     threads: HashMap<(usize, usize, usize), JoinHandle<CompressedFrame>>,
+    /// zstd: -7 ..= 22
     pub compression_level: i32,
     pub colors: Colors,
     pub comment: Option<String>,
+    /// um per pixel
     pub px_size: Option<f64>,
+    /// um per slice
     pub delta_z: Option<f64>,
+    /// s per frame
     pub time_interval: Option<f64>,
+    /// extra tags; per frame: key = Some((c, z, t)), global: key = None
     pub extra_tags: HashMap<Option<(usize, usize, usize)>, Vec<Tag>>,
 }
 
@@ -624,7 +650,8 @@ impl Drop for IJTiffFile {
 }
 
 impl IJTiffFile {
-    /// create new tifffile from path string
+    /// create new tifffile from path string, use it's save() method to save frames
+    /// the file is finalized when it goes out of scope
     pub fn new(path: &str) -> Result<Self> {
         let mut file = OpenOptions::new()
             .create(true)
@@ -746,6 +773,7 @@ impl IJTiffFile {
         }
     }
 
+    /// save a 2d array to the tiff file at channel c, slice z, and time t
     pub fn save<'a, A, T>(&mut self, frame: A, c: usize, z: usize, t: usize) -> Result<()>
     where
         A: AsArray<'a, T, Ix2>,
