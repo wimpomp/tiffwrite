@@ -473,8 +473,8 @@ impl CompressedFrame {
 
         CompressedFrame {
             bytes,
-            image_width: shape[0] as u32,
-            image_length: shape[1] as u32,
+            image_width: shape[1] as u32,
+            image_length: shape[0] as u32,
             tile_width,
             tile_length,
             bits_per_sample: T::BITS_PER_SAMPLE,
@@ -507,6 +507,7 @@ impl CompressedFrame {
         let bytes_per_sample = (T::BITS_PER_SAMPLE / 8) as usize;
         encoder.include_contentsize(true)?;
         encoder.set_pledged_src_size(Some((bytes_per_sample * tile_width * tile_length) as u64))?;
+        encoder.include_checksum(true)?;
         let shape = (slice.1 - slice.0, slice.3 - slice.2);
         for i in 0..shape.0 {
             CompressedFrame::write(
@@ -572,6 +573,7 @@ impl Frame {
 /// trait to convert numbers to bytes
 pub trait Bytes {
     const BITS_PER_SAMPLE: u16;
+    /// 1: unsigned int, 2: signed int, 3: float
     const SAMPLE_FORMAT: u16;
 
     fn bytes(&self) -> Vec<u8>;
@@ -612,11 +614,13 @@ bytes_impl!(isize, 32, 2);
 bytes_impl!(f32, 32, 3);
 bytes_impl!(f64, 64, 3);
 
-/// what colormap to save in the tiff; None, Colors: gradient from black to color, or full Colormap
+/// what colormap to save in the tiff;
 #[derive(Clone, Debug)]
 pub enum Colors {
     None,
+    /// gradient from black to rgb color, 1 vec per channel
     Colors(Vec<Vec<u8>>),
+    /// vec of rgb colors
     Colormap(Vec<Vec<u8>>),
 }
 
