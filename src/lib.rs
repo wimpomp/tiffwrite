@@ -24,6 +24,7 @@ const OFFSET: u64 = 16;
 const COMPRESSION: u16 = 50000;
 
 /// Image File Directory
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Debug)]
 struct IFD {
     tags: HashSet<Tag>,
@@ -42,23 +43,25 @@ impl IFD {
         tags.sort();
         ijtifffile.file.seek(SeekFrom::End(0))?;
         if ijtifffile.file.stream_position()? % 2 == 1 {
-            ijtifffile.file.write(&[0])?;
+            ijtifffile.file.write_all(&[0])?;
         }
         let offset = ijtifffile.file.stream_position()?;
-        ijtifffile.file.write(&(tags.len() as u64).to_le_bytes())?;
+        ijtifffile
+            .file
+            .write_all(&(tags.len() as u64).to_le_bytes())?;
 
         for tag in tags.iter_mut() {
             tag.write_tag(ijtifffile)?;
         }
         let where_to_write_next_ifd_offset = ijtifffile.file.stream_position()?;
-        ijtifffile.file.write(&vec![0u8; OFFSET_SIZE])?;
+        ijtifffile.file.write_all(&[0; OFFSET_SIZE])?;
         for tag in tags.iter() {
             tag.write_data(ijtifffile)?;
         }
         ijtifffile
             .file
             .seek(SeekFrom::Start(where_to_write_offset))?;
-        ijtifffile.file.write(&offset.to_le_bytes())?;
+        ijtifffile.file.write_all(&offset.to_le_bytes())?;
         Ok(where_to_write_next_ifd_offset)
     }
 }
@@ -116,36 +119,28 @@ impl Tag {
         Tag::new(code, bytes, 2)
     }
 
-    pub fn short(code: u16, value: &Vec<u16>) -> Self {
+    pub fn short(code: u16, value: &[u16]) -> Self {
         Tag::new(
             code,
-            value
-                .into_iter()
-                .map(|x| x.to_le_bytes())
-                .flatten()
-                .collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             3,
         )
     }
 
-    pub fn long(code: u16, value: &Vec<u32>) -> Self {
+    pub fn long(code: u16, value: &[u32]) -> Self {
         Tag::new(
             code,
-            value
-                .into_iter()
-                .map(|x| x.to_le_bytes())
-                .flatten()
-                .collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             4,
         )
     }
 
-    pub fn rational(code: u16, value: &Vec<Rational32>) -> Self {
+    pub fn rational(code: u16, value: &[Rational32]) -> Self {
         Tag::new(
             code,
             value
-                .into_iter()
-                .map(|x| {
+                .iter()
+                .flat_map(|x| {
                     u32::try_from(*x.denom())
                         .unwrap()
                         .to_le_bytes()
@@ -153,168 +148,128 @@ impl Tag {
                         .chain(u32::try_from(*x.numer()).unwrap().to_le_bytes())
                         .collect::<Vec<_>>()
                 })
-                .flatten()
                 .collect(),
             5,
         )
     }
 
-    pub fn sbyte(code: u16, value: &Vec<i8>) -> Self {
+    pub fn sbyte(code: u16, value: &[i8]) -> Self {
         Tag::new(
             code,
-            value.iter().map(|x| x.to_le_bytes()).flatten().collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             6,
         )
     }
 
-    pub fn sshort(code: u16, value: &Vec<i16>) -> Self {
+    pub fn sshort(code: u16, value: &[i16]) -> Self {
         Tag::new(
             code,
-            value
-                .into_iter()
-                .map(|x| x.to_le_bytes())
-                .flatten()
-                .collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             8,
         )
     }
 
-    pub fn slong(code: u16, value: &Vec<i32>) -> Self {
+    pub fn slong(code: u16, value: &[i32]) -> Self {
         Tag::new(
             code,
-            value
-                .into_iter()
-                .map(|x| x.to_le_bytes())
-                .flatten()
-                .collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             9,
         )
     }
 
-    pub fn srational(code: u16, value: &Vec<Rational32>) -> Self {
+    pub fn srational(code: u16, value: &[Rational32]) -> Self {
         Tag::new(
             code,
             value
-                .into_iter()
-                .map(|x| {
-                    i32::try_from(*x.denom())
-                        .unwrap()
+                .iter()
+                .flat_map(|x| {
+                    x.denom()
                         .to_le_bytes()
                         .into_iter()
-                        .chain(i32::try_from(*x.numer()).unwrap().to_le_bytes())
+                        .chain(x.numer().to_le_bytes())
                         .collect::<Vec<_>>()
                 })
-                .flatten()
                 .collect(),
             10,
         )
     }
 
-    pub fn float(code: u16, value: &Vec<f32>) -> Self {
+    pub fn float(code: u16, value: &[f32]) -> Self {
         Tag::new(
             code,
-            value
-                .into_iter()
-                .map(|x| x.to_le_bytes())
-                .flatten()
-                .collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             11,
         )
     }
 
-    pub fn double(code: u16, value: &Vec<f64>) -> Self {
+    pub fn double(code: u16, value: &[f64]) -> Self {
         Tag::new(
             code,
-            value
-                .into_iter()
-                .map(|x| x.to_le_bytes())
-                .flatten()
-                .collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             12,
         )
     }
 
-    pub fn ifd(code: u16, value: &Vec<u32>) -> Self {
+    pub fn ifd(code: u16, value: &[u32]) -> Self {
         Tag::new(
             code,
-            value
-                .into_iter()
-                .map(|x| x.to_le_bytes())
-                .flatten()
-                .collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             13,
         )
     }
 
     pub fn unicode(code: u16, value: &str) -> Self {
-        let mut bytes: Vec<u8> = value
-            .encode_utf16()
-            .map(|x| x.to_le_bytes())
-            .flatten()
-            .collect();
+        let mut bytes: Vec<u8> = value.encode_utf16().flat_map(|x| x.to_le_bytes()).collect();
         bytes.push(0);
         Tag::new(code, bytes, 14)
     }
 
-    pub fn complex(code: u16, value: &Vec<Complex<f32>>) -> Self {
+    pub fn complex(code: u16, value: &[Complex<f32>]) -> Self {
         Tag::new(
             code,
             value
-                .into_iter()
-                .map(|x| {
+                .iter()
+                .flat_map(|x| {
                     x.re.to_le_bytes()
                         .into_iter()
                         .chain(x.im.to_le_bytes())
                         .collect::<Vec<_>>()
                 })
-                .flatten()
                 .collect(),
             15,
         )
     }
 
-    pub fn long8(code: u16, value: &Vec<u64>) -> Self {
+    pub fn long8(code: u16, value: &[u64]) -> Self {
         Tag::new(
             code,
-            value
-                .into_iter()
-                .map(|x| x.to_le_bytes())
-                .flatten()
-                .collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             16,
         )
     }
 
-    pub fn slong8(code: u16, value: &Vec<i64>) -> Self {
+    pub fn slong8(code: u16, value: &[i64]) -> Self {
         Tag::new(
             code,
-            value
-                .into_iter()
-                .map(|x| x.to_le_bytes())
-                .flatten()
-                .collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             17,
         )
     }
 
-    pub fn ifd8(code: u16, value: &Vec<u64>) -> Self {
+    pub fn ifd8(code: u16, value: &[u64]) -> Self {
         Tag::new(
             code,
-            value
-                .into_iter()
-                .map(|x| x.to_le_bytes())
-                .flatten()
-                .collect(),
+            value.iter().flat_map(|x| x.to_le_bytes()).collect(),
             18,
         )
     }
 
-    pub fn short_long_or_long8(code: u16, value: &Vec<u64>) -> Self {
+    pub fn short_long_or_long8(code: u16, value: &[u64]) -> Self {
         let m = *value.iter().max().unwrap();
         if m < 65536 {
-            Tag::short(code, &value.into_iter().map(|x| *x as u16).collect())
+            Tag::short(code, &value.iter().map(|x| *x as u16).collect::<Vec<_>>())
         } else if m < 4294967296 {
-            Tag::long(code, &value.into_iter().map(|x| *x as u32).collect())
+            Tag::long(code, &value.iter().map(|x| *x as u32).collect::<Vec<_>>())
         } else {
             Tag::long8(code, value)
         }
@@ -348,16 +303,16 @@ impl Tag {
 
     fn write_tag(&mut self, ijtifffile: &mut IJTiffFile) -> Result<()> {
         self.offset = ijtifffile.file.stream_position()?;
-        ijtifffile.file.write(&self.code.to_le_bytes())?;
-        ijtifffile.file.write(&self.ttype.to_le_bytes())?;
-        ijtifffile.file.write(&self.count().to_le_bytes())?;
+        ijtifffile.file.write_all(&self.code.to_le_bytes())?;
+        ijtifffile.file.write_all(&self.ttype.to_le_bytes())?;
+        ijtifffile.file.write_all(&self.count().to_le_bytes())?;
         if self.bytes.len() <= OFFSET_SIZE {
-            ijtifffile.file.write(&self.bytes)?;
-            for _ in self.bytes.len()..OFFSET_SIZE {
-                ijtifffile.file.write(&[0])?;
-            }
+            ijtifffile.file.write_all(&self.bytes)?;
+            ijtifffile
+                .file
+                .write_all(&vec![0; OFFSET_SIZE - self.bytes.len()])?;
         } else {
-            ijtifffile.file.write(&vec![0u8; OFFSET_SIZE])?;
+            ijtifffile.file.write_all(&[0; OFFSET_SIZE])?;
         }
         Ok(())
     }
@@ -369,9 +324,9 @@ impl Tag {
             ijtifffile.file.seek(SeekFrom::Start(
                 self.offset + (TAG_SIZE - OFFSET_SIZE) as u64,
             ))?;
-            ijtifffile.file.write(&offset.to_le_bytes())?;
+            ijtifffile.file.write_all(&offset.to_le_bytes())?;
             if ijtifffile.file.stream_position()? % 2 == 1 {
-                ijtifffile.file.write(&[0u8])?;
+                ijtifffile.file.write_all(&[0])?;
             }
         }
         Ok(())
@@ -397,8 +352,7 @@ impl CompressedFrame {
         let shape = frame.shape();
         let tile_size = 2usize
             .pow(((shape[0] as f64 * shape[1] as f64 / 2f64).log2() / 2f64).round() as u32)
-            .max(16)
-            .min(1024);
+            .clamp(16, 1024);
 
         let tile_width = tile_size;
         let tile_length = tile_size;
@@ -482,16 +436,6 @@ impl CompressedFrame {
         }
     }
 
-    /// loop until all bytes are encoded
-    fn write(encoder: &mut Encoder<&mut Vec<u8>>, buf: &[u8]) -> Result<()> {
-        let b = buf.len();
-        let mut w = 0;
-        while w < b {
-            w += encoder.write(&buf[w..])?;
-        }
-        Ok(())
-    }
-
     fn compress_tile<T>(
         frame: ArcArray2<T>,
         slice: (usize, usize, usize, usize),
@@ -510,8 +454,7 @@ impl CompressedFrame {
         encoder.include_checksum(true)?;
         let shape = (slice.1 - slice.0, slice.3 - slice.2);
         for i in 0..shape.0 {
-            CompressedFrame::write(
-                &mut encoder,
+            encoder.write_all(
                 &frame
                     .slice(s![slice.0..slice.1, slice.2..slice.3])
                     .slice(s![i, ..])
@@ -520,15 +463,12 @@ impl CompressedFrame {
                     .flatten()
                     .collect::<Vec<_>>(),
             )?;
-            CompressedFrame::write(
-                &mut encoder,
-                &vec![0u8; bytes_per_sample * (tile_width - shape.1)],
-            )?;
+            encoder.write_all(&vec![0; bytes_per_sample * (tile_width - shape.1)])?;
         }
-        CompressedFrame::write(
-            &mut encoder,
-            &vec![0u8; bytes_per_sample * tile_width * (tile_length - shape.0)],
-        )?;
+        encoder.write_all(&vec![
+            0;
+            bytes_per_sample * tile_width * (tile_length - shape.0)
+        ])?;
         encoder.finish()?;
         Ok(dest)
     }
@@ -547,6 +487,7 @@ struct Frame {
 }
 
 impl Frame {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         offsets: Vec<u64>,
         bytecounts: Vec<u64>,
@@ -663,11 +604,11 @@ impl IJTiffFile {
             .write(true)
             .read(true)
             .open(path)?;
-        file.write(b"II")?;
-        file.write(&43u16.to_le_bytes())?;
-        file.write(&8u16.to_le_bytes())?;
-        file.write(&0u16.to_le_bytes())?;
-        file.write(&OFFSET.to_le_bytes())?;
+        file.write_all(b"II")?;
+        file.write_all(&43u16.to_le_bytes())?;
+        file.write_all(&8u16.to_le_bytes())?;
+        file.write_all(&0u16.to_le_bytes())?;
+        file.write_all(&OFFSET.to_le_bytes())?;
         Ok(IJTiffFile {
             file,
             frames: HashMap::new(),
@@ -753,7 +694,7 @@ impl IJTiffFile {
     fn hash_check(&mut self, bytes: &Vec<u8>, offset: u64) -> Result<bool> {
         let current_offset = self.file.stream_position()?;
         self.file.seek(SeekFrom::Start(offset))?;
-        let mut buffer = vec![0u8; bytes.len()];
+        let mut buffer = vec![0; bytes.len()];
         self.file.read_exact(&mut buffer)?;
         let same = bytes == &buffer;
         self.file.seek(SeekFrom::Start(current_offset))?;
@@ -763,16 +704,16 @@ impl IJTiffFile {
     fn write(&mut self, bytes: &Vec<u8>) -> Result<u64> {
         let hash = IJTiffFile::hash(&bytes);
         if self.hashes.contains_key(&hash)
-            && self.hash_check(&bytes, *self.hashes.get(&hash).unwrap())?
+            && self.hash_check(bytes, *self.hashes.get(&hash).unwrap())?
         {
             Ok(*self.hashes.get(&hash).unwrap())
         } else {
             if self.file.stream_position()? % 2 == 1 {
-                self.file.write(&[0])?;
+                self.file.write_all(&[0])?;
             }
             let offset = self.file.stream_position()?;
             self.hashes.insert(hash, offset);
-            self.file.write(&bytes)?;
+            self.file.write_all(bytes)?;
             Ok(offset)
         }
     }
@@ -892,32 +833,32 @@ impl IJTiffFile {
                     }
                 }
                 let mut ifd = IFD::new();
-                ifd.tags.insert(Tag::long(256, &vec![frame.image_width]));
-                ifd.tags.insert(Tag::long(257, &vec![frame.image_length]));
+                ifd.tags.insert(Tag::long(256, &[frame.image_width]));
+                ifd.tags.insert(Tag::long(257, &[frame.image_length]));
                 ifd.tags
                     .insert(Tag::short(258, &vec![frame.bits_per_sample; frame_count]));
-                ifd.tags.insert(Tag::short(259, &vec![COMPRESSION]));
+                ifd.tags.insert(Tag::short(259, &[COMPRESSION]));
                 ifd.tags
                     .insert(Tag::ascii(270, &self.description(c_size, z_size, t_size)));
-                ifd.tags.insert(Tag::short(277, &vec![frame_count as u16]));
+                ifd.tags.insert(Tag::short(277, &[frame_count as u16]));
                 ifd.tags.insert(Tag::ascii(305, "tiffwrite_rs"));
-                ifd.tags.insert(Tag::short(322, &vec![frame.tile_width]));
-                ifd.tags.insert(Tag::short(323, &vec![frame.tile_length]));
+                ifd.tags.insert(Tag::short(322, &[frame.tile_width]));
+                ifd.tags.insert(Tag::short(323, &[frame.tile_length]));
                 ifd.tags.insert(Tag::short_long_or_long8(324, &offsets));
                 ifd.tags.insert(Tag::short_long_or_long8(325, &bytecounts));
                 if frame.sample_format > 1 {
-                    ifd.tags.insert(Tag::short(339, &vec![frame.sample_format]));
+                    ifd.tags.insert(Tag::short(339, &[frame.sample_format]));
                 }
                 if let Some(px_size) = self.px_size {
-                    let r = vec![Rational32::from_f64(px_size).unwrap()];
+                    let r = [Rational32::from_f64(px_size).unwrap()];
                     ifd.tags.insert(Tag::rational(282, &r));
                     ifd.tags.insert(Tag::rational(283, &r));
-                    ifd.tags.insert(Tag::short(296, &vec![1]));
+                    ifd.tags.insert(Tag::short(296, &[1]));
                 }
                 if let Colors::Colormap(_) = &self.colors {
-                    ifd.tags.insert(Tag::short(262, &vec![3]));
+                    ifd.tags.insert(Tag::short(262, &[3]));
                 } else if let Colors::None = self.colors {
-                    ifd.tags.insert(Tag::short(262, &vec![1]));
+                    ifd.tags.insert(Tag::short(262, &[1]));
                 }
                 if frame_number == 0 {
                     if let Colors::Colormap(colormap) = &self.colors {
@@ -933,12 +874,12 @@ impl IJTiffFile {
                             320,
                             &self.get_color(&colors[frame_number], frame.bits_per_sample),
                         ));
-                        ifd.tags.insert(Tag::short(262, &vec![3]));
+                        ifd.tags.insert(Tag::short(262, &[3]));
                     }
                 }
                 if let Colors::None = &self.colors {
                     if c_size > 1 {
-                        ifd.tags.insert(Tag::short(284, &vec![2]));
+                        ifd.tags.insert(Tag::short(284, &[2]));
                     }
                 }
                 for channel in 0..samples_per_pixel {
@@ -964,7 +905,7 @@ impl IJTiffFile {
             } else {
                 warn.push((frame_number, 0));
             }
-            if warn.len() > 0 {
+            if !warn.is_empty() {
                 println!("The following frames were not added to the tif file:");
                 for (frame_number, channel) in &warn {
                     let (c, z, t) = self.get_czt(*frame_number, *channel, c_size, z_size);
@@ -978,7 +919,7 @@ impl IJTiffFile {
         }
         self.file
             .seek(SeekFrom::Start(where_to_write_next_ifd_offset))?;
-        self.file.write(&0u64.to_le_bytes())?;
+        self.file.write_all(&0u64.to_le_bytes())?;
         Ok(())
     }
 }

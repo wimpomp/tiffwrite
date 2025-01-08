@@ -50,7 +50,7 @@ impl PyTag {
                 &rational
                     .into_iter()
                     .map(|x| Rational32::from_f64(x).unwrap())
-                    .collect(),
+                    .collect::<Vec<_>>(),
             ),
         }
     }
@@ -84,7 +84,7 @@ impl PyTag {
                 &srational
                     .into_iter()
                     .map(|x| Rational32::from_f64(x).unwrap())
-                    .collect(),
+                    .collect::<Vec<_>>(),
             ),
         }
     }
@@ -125,7 +125,7 @@ impl PyTag {
                 &complex
                     .into_iter()
                     .map(|(x, y)| Complex { re: x, im: y })
-                    .collect(),
+                    .collect::<Vec<_>>(),
             ),
         }
     }
@@ -176,7 +176,7 @@ impl PyIJTiffFile {
     /// set zstd compression level: -7 ..= 22
     fn set_compression_level(&mut self, compression_level: i32) {
         if let Some(ref mut ijtifffile) = self.ijtifffile {
-            ijtifffile.compression_level = compression_level.max(-7).min(22);
+            ijtifffile.compression_level = compression_level.clamp(-7, 22);
         }
     }
 
@@ -294,6 +294,7 @@ impl PyIJTiffFile {
         Ok(())
     }
 
+    #[pyo3(signature = (tag, czt=None))]
     fn append_extra_tag(&mut self, tag: PyTag, czt: Option<(usize, usize, usize)>) {
         if let Some(ijtifffile) = self.ijtifffile.as_mut() {
             if let Some(extra_tags) = ijtifffile.extra_tags.get_mut(&czt) {
@@ -302,6 +303,7 @@ impl PyIJTiffFile {
         }
     }
 
+    #[pyo3(signature = (czt=None))]
     fn get_tags(&self, czt: Option<(usize, usize, usize)>) -> PyResult<Vec<PyTag>> {
         if let Some(ijtifffile) = &self.ijtifffile {
             if let Some(extra_tags) = ijtifffile.extra_tags.get(&czt) {

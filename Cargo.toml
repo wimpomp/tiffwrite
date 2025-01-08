@@ -1,6 +1,6 @@
 [package]
 name = "tiffwrite"
-version = "2024.12.1"
+version = "2025.1.0"
 edition = "2021"
 authors = ["Wim Pomp <w.pomp@nki.nl>"]
 license = "GPL-3.0-or-later"
