@@ -1,13 +1,15 @@
 [package]
 name = "tiffwrite"
-version = "2025.1.0"
+version = "2025.2.0"
 edition = "2021"
 authors = ["Wim Pomp <w.pomp@nki.nl>"]
-license = "GPL-3.0-or-later"
+license = "MIT"
 description = "Write BioFormats/ImageJ compatible tiffs with zstd compression in parallel."
 homepage = "https://github.com/wimpomp/tiffwrite"
 repository = "https://github.com/wimpomp/tiffwrite"
 readme = "README.md"
+keywords = ["bioformats", "tiff", "ndarray", "zstd", "fiji"]
+categories = ["multimedia::images", "science"]
 
 [lib]
 name = "tiffwrite"
@@ -23,7 +25,7 @@ zstd = "0.13.2"
 numpy = { version = "0.23.0", optional = true }
 
 [dependencies.pyo3]
-version = "0.23.3"
+version = "0.23.4"
 features = ["extension-module", "abi3-py310", "generate-import-lib", "anyhow", "multiple-pymethods"]
 optional = true
 

@@ -391,10 +391,6 @@ impl CompressedFrame {
             }
         }
 
-        let mut a = Vec::new();
-        for i in 0..24 {
-            a.push(i);
-        }
         let bytes: Vec<_> = if slices.len() > 4 {
             slices
                 .into_par_iter()
@@ -920,6 +916,53 @@ impl IJTiffFile {
         self.file
             .seek(SeekFrom::Start(where_to_write_next_ifd_offset))?;
         self.file.write_all(&0u64.to_le_bytes())?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+
+    #[test]
+    /// An example of generating julia fractals.
+    fn julia_test() -> Result<()> {
+        let imgx = 800;
+        let imgy = 600;
+
+        let scalex = 3.0 / imgx as f32;
+        let scaley = 3.0 / imgy as f32;
+
+        let mut im_r = Array2::<u8>::zeros((imgy, imgx));
+        let mut im_g = Array2::<u8>::zeros((imgy, imgx));
+        let mut im_b = Array2::<u8>::zeros((imgy, imgx));
+        for x in 0..imgx {
+            for y in 0..imgy {
+                im_r[[y, x]] = (0.3 * x as f32) as u8;
+                im_b[[y, x]] = (0.3 * y as f32) as u8;
+
+                let cx = y as f32 * scalex - 1.5;
+                let cy = x as f32 * scaley - 1.5;
+
+                let c = Complex::new(-0.4, 0.6);
+                let mut z = Complex::new(cx, cy);
+
+                let mut i = 0;
+                while i < 255 && z.norm() <= 2.0 {
+                    z = z * z + c;
+                    i += 1;
+                }
+
+                im_g[[y, x]] = i as u8;
+            }
+        }
+
+        let mut f = IJTiffFile::new("julia.tif")?;
+        f.save(&im_r, 0, 0, 0)?;
+        f.save(&im_g, 1, 0, 0)?;
+        f.save(&im_b, 2, 0, 0)?;
+
         Ok(())
     }
 }

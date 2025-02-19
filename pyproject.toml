@@ -5,22 +5,35 @@ build-backend = "maturin"
 [project]
 name = "tiffwrite"
 dynamic = ["version"]
-authors = [{ name = "Wim Pomp", email = "w.pomp@nki.nl" }]
-license = "GPLv3"
-description = "Write BioFormats/ImageJ compatible tiffs with zstd compression in parallel."
-homepage = "https://github.com/wimpomp/tiffwrite"
-repository = "https://github.com/wimpomp/tiffwrite"
+authors = [
+    { name = "Wim Pomp", email = "w.pomp@nki.nl" }
+]
+license = "MIT"
 readme = "README.md"
+keywords = ["bioformats", "tiff", "ndarray", "zstd", "fiji"]
+description = "Write BioFormats/ImageJ compatible tiffs with zstd compression in parallel."
 requires-python = ">=3.10"
 classifiers = [
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Rust",
-    "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
+
 dependencies = ["colorcet", "matplotlib", "numpy", "tqdm"]
 
 [project.optional-dependencies]
 test = ["pytest", "tifffile", "imagecodecs"]
+
+[project.urls]
+homepage = "https://github.com/wimpomp/tiffwrite"
+repository = "https://github.com/wimpomp/tiffwrite"
 
 [tool.maturin]
 python-source = "py"

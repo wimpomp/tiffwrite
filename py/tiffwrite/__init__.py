@@ -150,19 +150,19 @@ def get_color(color: str) -> np.ndarray:
     return np.array([int(''.join(i), 16) for i in zip(*[iter(mpl_colors.to_hex(color)[1:])] * 2)]).astype('uint8')
 
 
-def tiffwrite(file: str | Path, data: np.ndarray, axes: str = 'TZCXY', dtype: DTypeLike = None, bar: bool = False,
+def tiffwrite(file: str | Path, data: np.ndarray, axes: str = 'TZCYX', dtype: DTypeLike = None, bar: bool = False,
               *args: Any, **kwargs: Any) -> None:
     """ file:       string; filename of the new tiff file
         data:       2 to 5D numpy array
-        axes:       string; order of dimensions in data, default: TZCXY for 5D, ZCXY for 4D, CXY for 3D, XY for 2D data
+        axes:       string; order of dimensions in data, default: TZCYX for 5D, ZCYX for 4D, CYX for 3D, YX for 2D data
         dtype:      string; datatype to use when saving to tiff
         bar:        bool; whether to show a progress bar
         other args: see IJTiffFile
     """
 
     axes = axes[-np.ndim(data):].upper()
-    if not axes == 'CZTXY':
-        axes_shuffle = [axes.find(i) for i in 'CZTXY']
+    if not axes == 'CZTYX':
+        axes_shuffle = [axes.find(i) for i in 'CZTYX']
         axes_add = [i for i, j in enumerate(axes_shuffle) if j < 0]
         axes_shuffle = [i for i in axes_shuffle if i >= 0]
         data = np.transpose(data, axes_shuffle)

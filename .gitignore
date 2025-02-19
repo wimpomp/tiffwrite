@@ -6,6 +6,6 @@
 /venv/
 /target/
 /Cargo.lock
-/foo.tif
+*.tif
 *.so
 __pycache__
