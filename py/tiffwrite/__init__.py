@@ -61,14 +61,21 @@ class IJTiffFile(rs.IJTiffFile):
                  deltaz: float = None, timeinterval: float = None,
                  compression: int | str | tuple[int, int] | tuple[str, int] = None, comment: str = None,
                  extratags: Sequence[Tag] = None) -> None:
-        codecs = {'z': 50000, 'd': 8, 8: 8, 50000: 50000}
+
+        def get_codec(idx: int | str):
+            codecs = {'z': 50000, 'd': 8, 8: 8, 50000: 50000}
+            if isinstance(idx, str):
+                return codecs.get(idx[0].lower(), 50000)
+            else:
+                return codecs.get(int(idx), 50000)
+
         self.path = Path(path)
         self.dtype = np.dtype(dtype)
         if compression is not None:
             if isinstance(compression, tuple):
-                compression = codecs.get(compression[0], 50000), (int(compression[1]) if len(compression) == 2 else 22)
+                compression = get_codec(compression[0]), (int(compression[1]) if len(compression) > 1 else 22)
             else:
-                compression = codecs.get(compression, 50000), 22
+                compression = get_codec(compression), 22
             self.set_compression(*compression)
         if colors is not None:
             self.colors = np.array([get_color(color) for color in colors])
