@@ -3,6 +3,7 @@ mod py;
 
 use anyhow::Result;
 use chrono::Utc;
+use flate2::write::ZlibEncoder;
 use ndarray::{s, ArcArray2, AsArray, Ix2};
 use num::{traits::ToBytes, Complex, FromPrimitive, Rational32};
 use rayon::prelude::*;
@@ -16,12 +17,28 @@ use std::{
     thread,
     thread::{sleep, JoinHandle},
 };
+use zstd::zstd_safe::CompressionLevel;
 use zstd::{stream::Encoder, DEFAULT_COMPRESSION_LEVEL};
 
 const TAG_SIZE: usize = 20;
 const OFFSET_SIZE: usize = 8;
 const OFFSET: u64 = 16;
-const COMPRESSION: u16 = 50000;
+
+/// Compression: deflate or zstd
+#[derive(Clone, Debug)]
+pub enum Compression {
+    Deflate,
+    Zstd(CompressionLevel),
+}
+
+impl Compression {
+    fn index(&self) -> u16 {
+        match self {
+            Compression::Deflate => 8,
+            Compression::Zstd(_) => 50000,
+        }
+    }
+}
 
 /// Image File Directory
 #[allow(clippy::upper_case_acronyms)]
@@ -345,7 +362,7 @@ struct CompressedFrame {
 }
 
 impl CompressedFrame {
-    fn new<T>(frame: ArcArray2<T>, compression_level: i32) -> CompressedFrame
+    fn new<T>(frame: ArcArray2<T>, compression: Compression) -> CompressedFrame
     where
         T: Bytes + Send + Sync,
     {
@@ -391,34 +408,68 @@ impl CompressedFrame {
             }
         }
 
-        let bytes: Vec<_> = if slices.len() > 4 {
-            slices
-                .into_par_iter()
-                .map(|slice| {
-                    CompressedFrame::compress_tile(
-                        frame.clone(),
-                        slice,
-                        tile_size,
-                        tile_size,
-                        compression_level,
-                    )
-                    .unwrap()
-                })
-                .collect()
-        } else {
-            slices
-                .into_iter()
-                .map(|slice| {
-                    CompressedFrame::compress_tile(
-                        frame.clone(),
-                        slice,
-                        tile_size,
-                        tile_size,
-                        compression_level,
-                    )
-                    .unwrap()
-                })
-                .collect()
+        let bytes: Vec<_> = match compression {
+            Compression::Deflate => {
+                if slices.len() > 4 {
+                    slices
+                        .into_par_iter()
+                        .map(|slice| {
+                            CompressedFrame::compress_tile_deflate(
+                                frame.clone(),
+                                slice,
+                                tile_size,
+                                tile_size,
+                            )
+                            .unwrap()
+                        })
+                        .collect()
+                } else {
+                    slices
+                        .into_iter()
+                        .map(|slice| {
+                            CompressedFrame::compress_tile_deflate(
+                                frame.clone(),
+                                slice,
+                                tile_size,
+                                tile_size,
+                            )
+                            .unwrap()
+                        })
+                        .collect()
+                }
+            }
+
+            Compression::Zstd(level) => {
+                if slices.len() > 4 {
+                    slices
+                        .into_par_iter()
+                        .map(|slice| {
+                            CompressedFrame::compress_tile_zstd(
+                                frame.clone(),
+                                slice,
+                                tile_size,
+                                tile_size,
+                                level,
+                            )
+                            .unwrap()
+                        })
+                        .collect()
+                } else {
+                    slices
+                        .into_iter()
+                        .map(|slice| {
+                            CompressedFrame::compress_tile_zstd(
+                                frame.clone(),
+                                slice,
+                                tile_size,
+                                tile_size,
+                                level,
+                            )
+                            .unwrap()
+                        })
+                        .collect()
+                }
+            }
         };
 
         CompressedFrame {
@@ -432,22 +483,18 @@ impl CompressedFrame {
         }
     }
 
-    fn compress_tile<T>(
+    fn encode<W, T>(
+        mut encoder: W,
         frame: ArcArray2<T>,
         slice: (usize, usize, usize, usize),
         tile_width: usize,
         tile_length: usize,
-        compression_level: i32,
-    ) -> Result<Vec<u8>>
+    ) -> Result<W>
     where
+        W: Write,
         T: Bytes,
     {
-        let mut dest = Vec::new();
-        let mut encoder = Encoder::new(&mut dest, compression_level)?;
         let bytes_per_sample = (T::BITS_PER_SAMPLE / 8) as usize;
-        encoder.include_contentsize(true)?;
-        encoder.set_pledged_src_size(Some((bytes_per_sample * tile_width * tile_length) as u64))?;
-        encoder.include_checksum(true)?;
         let shape = (slice.1 - slice.0, slice.3 - slice.2);
         for i in 0..shape.0 {
             encoder.write_all(
@@ -465,6 +512,40 @@ impl CompressedFrame {
             0;
             bytes_per_sample * tile_width * (tile_length - shape.0)
         ])?;
+        Ok(encoder)
+    }
+
+    fn compress_tile_deflate<T>(
+        frame: ArcArray2<T>,
+        slice: (usize, usize, usize, usize),
+        tile_width: usize,
+        tile_length: usize,
+    ) -> Result<Vec<u8>>
+    where
+        T: Bytes,
+    {
+        let mut encoder = ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder = CompressedFrame::encode(encoder, frame, slice, tile_width, tile_length)?;
+        Ok(encoder.finish()?)
+    }
+
+    fn compress_tile_zstd<T>(
+        frame: ArcArray2<T>,
+        slice: (usize, usize, usize, usize),
+        tile_width: usize,
+        tile_length: usize,
+        compression_level: i32,
+    ) -> Result<Vec<u8>>
+    where
+        T: Bytes,
+    {
+        let mut dest = Vec::new();
+        let mut encoder = Encoder::new(&mut dest, compression_level)?;
+        let bytes_per_sample = (T::BITS_PER_SAMPLE / 8) as usize;
+        encoder.include_contentsize(true)?;
+        encoder.set_pledged_src_size(Some((bytes_per_sample * tile_width * tile_length) as u64))?;
+        encoder.include_checksum(true)?;
+        encoder = CompressedFrame::encode(encoder, frame, slice, tile_width, tile_length)?;
         encoder.finish()?;
         Ok(dest)
     }
@@ -569,7 +650,7 @@ pub struct IJTiffFile {
     hashes: HashMap<u64, u64>,
     threads: HashMap<(usize, usize, usize), JoinHandle<CompressedFrame>>,
     /// zstd: -7 ..= 22
-    pub compression_level: i32,
+    pub compression: Compression,
     pub colors: Colors,
     pub comment: Option<String>,
     /// um per pixel
@@ -610,7 +691,7 @@ impl IJTiffFile {
             frames: HashMap::new(),
             hashes: HashMap::new(),
             threads: HashMap::new(),
-            compression_level: DEFAULT_COMPRESSION_LEVEL,
+            compression: Compression::Zstd(DEFAULT_COMPRESSION_LEVEL),
             colors: Colors::None,
             comment: None,
             px_size: None,
@@ -618,6 +699,11 @@ impl IJTiffFile {
             time_interval: None,
             extra_tags: HashMap::new(),
         })
+    }
+
+    /// set compression: zstd(level) or deflate
+    pub fn set_compression(&mut self, compression: Compression) {
+        self.compression = compression;
     }
 
     /// to be saved in description tag (270)
@@ -727,11 +813,11 @@ impl IJTiffFile {
             }
             sleep(Duration::from_millis(100));
         }
-        let compression_level = self.compression_level;
+        let compression = self.compression.clone();
         let frame = frame.into().to_shared();
         self.threads.insert(
             (c, z, t),
-            thread::spawn(move || CompressedFrame::new(frame, compression_level)),
+            thread::spawn(move || CompressedFrame::new(frame, compression)),
         );
         Ok(())
     }
@@ -833,7 +919,8 @@ impl IJTiffFile {
                 ifd.tags.insert(Tag::long(257, &[frame.image_length]));
                 ifd.tags
                     .insert(Tag::short(258, &vec![frame.bits_per_sample; frame_count]));
-                ifd.tags.insert(Tag::short(259, &[COMPRESSION]));
+                ifd.tags
+                    .insert(Tag::short(259, &[self.compression.index()]));
                 ifd.tags
                     .insert(Tag::ascii(270, &self.description(c_size, z_size, t_size)));
                 ifd.tags.insert(Tag::short(277, &[frame_count as u16]));

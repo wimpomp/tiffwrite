@@ -1,7 +1,8 @@
-use crate::{Colors, IJTiffFile, Tag};
+use crate::{Colors, Compression, IJTiffFile, Tag};
 use ndarray::s;
 use num::{Complex, FromPrimitive, Rational32};
 use numpy::{PyArrayMethods, PyReadonlyArray2};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 #[pyclass(subclass)]
@@ -174,10 +175,21 @@ impl PyIJTiffFile {
     }
 
     /// set zstd compression level: -7 ..= 22
-    fn set_compression_level(&mut self, compression_level: i32) {
+    fn set_compression(&mut self, compression: i32, level: i32) -> PyResult<()> {
+        let c = match compression {
+            50000 => Compression::Zstd(level.clamp(-7, 22)),
+            8 => Compression::Deflate,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "Unknown compression {}",
+                    compression
+                )))
+            }
+        };
         if let Some(ref mut ijtifffile) = self.ijtifffile {
-            ijtifffile.compression_level = compression_level.clamp(-7, 22);
+            ijtifffile.set_compression(c)
         }
+        Ok(())
     }
 
     #[getter]

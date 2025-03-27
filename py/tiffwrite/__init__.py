@@ -48,7 +48,7 @@ class IJTiffFile(rs.IJTiffFile):
         pxsize:         pixel size in um
         deltaz:         z slice interval in um
         timeinterval:   time between frames in seconds
-        compression:    zstd compression level: -7 to 22.
+        compression:    ('zstd', level) for zstd with compression level: -7 to 22, 'deflate' for deflate compresion
         comment:        comment to be saved in tif
         extratags:      other tags to be saved, example: (Tag.ascii(315, 'John Doe'), Tag.bytes(4567, [400, 500])
                             or (Tag.ascii(33432, 'Made by me'),).
@@ -58,14 +58,18 @@ class IJTiffFile(rs.IJTiffFile):
 
     def __init__(self, path: str | Path, *, dtype: DTypeLike = 'uint16',
                  colors: Sequence[str] = None, colormap: str = None, pxsize: float = None,
-                 deltaz: float = None, timeinterval: float = None, compression: int = None, comment: str = None,
+                 deltaz: float = None, timeinterval: float = None,
+                 compression: int | str | tuple[int, int] | tuple[str, int] = None, comment: str = None,
                  extratags: Sequence[Tag] = None) -> None:
+        codecs = {'z': 50000, 'd': 8, 8: 8, 50000: 50000}
         self.path = Path(path)
         self.dtype = np.dtype(dtype)
         if compression is not None:
-            if isinstance(compression, Sequence):
-                compression = compression[-1]
-            self.set_compression_level(compression)
+            if isinstance(compression, tuple):
+                compression = codecs.get(compression[0], 50000), (int(compression[1]) if len(compression) == 2 else 22)
+            else:
+                compression = codecs.get(compression, 50000), 22
+            self.set_compression(*compression)
         if colors is not None:
             self.colors = np.array([get_color(color) for color in colors])
         if colormap is not None:
