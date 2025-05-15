@@ -11,11 +11,12 @@ use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::time::Duration;
 use std::{cmp::Ordering, collections::HashMap};
 use std::{
     thread,
-    thread::{sleep, JoinHandle},
+    thread::{available_parallelism, sleep, JoinHandle},
 };
 use zstd::zstd_safe::CompressionLevel;
 use zstd::{stream::Encoder, DEFAULT_COMPRESSION_LEVEL};
@@ -672,9 +673,9 @@ impl Drop for IJTiffFile {
 }
 
 impl IJTiffFile {
-    /// create new tifffile from path string, use it's save() method to save frames
+    /// create new tifffile from path, use it's save() method to save frames
     /// the file is finalized when it goes out of scope
-    pub fn new(path: &str) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
         let mut file = OpenOptions::new()
             .create(true)
             .truncate(true)
@@ -806,9 +807,10 @@ impl IJTiffFile {
         A: AsArray<'a, T, Ix2>,
         T: Bytes + Clone + Send + Sync + 'static,
     {
+        let n_threads = usize::from(available_parallelism()?);
         loop {
             self.collect_threads(false)?;
-            if self.threads.len() < 48 {
+            if self.threads.len() < n_threads {
                 break;
             }
             sleep(Duration::from_millis(100));

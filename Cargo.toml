@@ -1,6 +1,6 @@
 [package]
 name = "tiffwrite"
-version = "2025.3.1"
+version = "2025.5.0"
 edition = "2021"
 authors = ["Wim Pomp <w.pomp@nki.nl>"]
 license = "MIT"
@@ -16,9 +16,9 @@ name = "tiffwrite"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-anyhow = "1.0.97"
-chrono = "0.4.40"
-flate2 = "1.1.0"
+anyhow = "1.0.98"
+chrono = "0.4.41"
+flate2 = "1.1.1"
 ndarray = "0.16.1"
 num = "0.4.3"
 rayon = "1.10.0"
